@@ -438,73 +438,154 @@
 
                         <template x-if="$store.mcpServersStore.registryDetail && !$store.mcpServersStore.registryDetailLoading">
                             <div>
-                                <div class="preview-card">
-                                    <div class="preview-card-title" x-text="$store.mcpServersStore.registryDetail.title || $store.mcpServersStore.registryDetail.name"></div>
-                                    <div class="server-card-description" x-text="$store.mcpServersStore.registryDetail.description || 'No description provided.'"></div>
-                                    <div class="detail-meta-grid">
-                                        <div class="detail-meta-item">
-                                            <span class="detail-meta-label">Version</span>
-                                            <span x-text="$store.mcpServersStore.registryDetail.version || 'latest'"></span>
+                                <div class="preview-card detail-hero-card">
+                                    <div class="detail-hero-header">
+                                        <div>
+                                            <div class="preview-card-title" x-text="$store.mcpServersStore.registryDetail.title || $store.mcpServersStore.registryDetail.name"></div>
+                                            <div class="detail-hero-subtitle" x-text="$store.mcpServersStore.registryDetail.name"></div>
                                         </div>
-                                        <div class="detail-meta-item">
-                                            <span class="detail-meta-label">Status</span>
-                                            <span x-text="$store.mcpServersStore.registryDetail.status || 'Unknown'"></span>
+                                        <div class="detail-hero-badges">
+                                            <span class="server-badge badge-accent" x-text="$store.mcpServersStore.registryDetail.version || 'latest'"></span>
+                                            <span class="server-badge" x-text="$store.mcpServersStore.registryDetail.status || 'Unknown'"></span>
+                                            <template x-if="$store.mcpServersStore.registryDetail.installedMatch">
+                                                <span class="server-badge">Installed</span>
+                                            </template>
+                                        </div>
+                                    </div>
+
+                                    <div class="server-card-description detail-hero-copy" x-text="$store.mcpServersStore.registryDetail.description || 'No description provided.'"></div>
+
+                                    <div class="detail-meta-grid detail-summary-grid">
+                                        <div class="detail-meta-item emphasis">
+                                            <span class="detail-meta-label">Updated</span>
+                                            <span x-text="$store.mcpServersStore.formatRelativeDate($store.mcpServersStore.registryDetail.updatedAt)"></span>
                                         </div>
                                         <div class="detail-meta-item">
                                             <span class="detail-meta-label">Published</span>
                                             <span x-text="$store.mcpServersStore.registryDetail.publishedAt || 'n/a'"></span>
                                         </div>
                                         <div class="detail-meta-item">
-                                            <span class="detail-meta-label">Updated</span>
-                                            <span x-text="$store.mcpServersStore.registryDetail.updatedAt || 'n/a'"></span>
+                                            <span class="detail-meta-label">Transport Paths</span>
+                                            <span x-text="`${($store.mcpServersStore.registryDetail.remotes || []).length} remote • ${($store.mcpServersStore.registryDetail.packages || []).length} package`"></span>
+                                        </div>
+                                        <div class="detail-meta-item">
+                                            <span class="detail-meta-label">Tool Catalog</span>
+                                            <span x-text="$store.mcpServersStore.registryDetailToolCount() ? `${$store.mcpServersStore.registryDetailToolCount()} tools loaded` : 'Registry-only metadata'"></span>
                                         </div>
                                     </div>
-                                    <div class="server-card-meta">
-                                        <span class="meta-item" x-text="$store.mcpServersStore.registryDetail.name"></span>
+
+                                    <div class="server-card-meta detail-link-row">
                                         <template x-if="$store.mcpServersStore.registryDetail.repository?.url">
                                             <a class="meta-link" :href="$store.mcpServersStore.registryDetail.repository.url" target="_blank" rel="noreferrer">Repository</a>
                                         </template>
                                         <template x-if="$store.mcpServersStore.registryDetail.websiteUrl">
                                             <a class="meta-link" :href="$store.mcpServersStore.registryDetail.websiteUrl" target="_blank" rel="noreferrer">Website</a>
                                         </template>
+                                        <template x-if="$store.mcpServersStore.registryDetail.installedMatch">
+                                            <span class="meta-pill accent" x-text="`Installed as ${$store.mcpServersStore.registryDetail.installedMatch.name}`"></span>
+                                        </template>
                                     </div>
                                 </div>
 
-                                <template x-if="$store.mcpServersStore.registryDetail.remotes?.length">
-                                    <div class="preview-card">
-                                        <div class="preview-card-title">Remote Endpoints</div>
-                                        <div class="detail-stack">
-                                            <template x-for="remote in $store.mcpServersStore.registryDetail.remotes" :key="`${remote.type}:${remote.url}`">
-                                                <div class="detail-block">
-                                                    <div class="server-card-meta">
-                                                        <span class="server-badge badge-accent" x-text="remote.type || 'remote'"></span>
-                                                        <span class="meta-item detail-url" x-text="remote.url"></span>
+                                <div class="detail-section-grid">
+                                    <template x-if="$store.mcpServersStore.registryDetail.remotes?.length">
+                                        <div class="preview-card">
+                                            <div class="preview-card-title">Remote Connections</div>
+                                            <div class="detail-section-note">Live endpoints published for this version.</div>
+                                            <div class="detail-stack">
+                                                <template x-for="remote in $store.mcpServersStore.registryDetail.remotes" :key="`${remote.type}:${remote.url}`">
+                                                    <div class="detail-block">
+                                                        <div class="server-card-meta compact-row">
+                                                            <span class="server-badge badge-accent" x-text="remote.type || 'remote'"></span>
+                                                            <span class="meta-item detail-url" x-text="remote.url"></span>
+                                                        </div>
+                                                        <template x-if="remote.headers?.length">
+                                                            <div class="detail-chip-row">
+                                                                <template x-for="header in remote.headers" :key="header.name">
+                                                                    <span class="meta-pill" x-text="header.name + (header.isRequired ? ' required' : '')"></span>
+                                                                </template>
+                                                            </div>
+                                                        </template>
+                                                        <template x-if="remote.variables && Object.keys(remote.variables).length">
+                                                            <div class="detail-subtext" x-text="`URL variables: ${Object.keys(remote.variables).join(', ')}`"></div>
+                                                        </template>
                                                     </div>
-                                                    <template x-if="remote.headers?.length">
-                                                        <div class="detail-subtext" x-text="`Headers: ${remote.headers.map((header) => header.name).join(', ')}`"></div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </template>
+
+                                    <template x-if="$store.mcpServersStore.registryDetail.packages?.length">
+                                        <div class="preview-card">
+                                            <div class="preview-card-title">Package Installs</div>
+                                            <div class="detail-section-note">Runtime and input requirements for direct stdio installs.</div>
+                                            <div class="detail-stack">
+                                                <template x-for="pkg in $store.mcpServersStore.registryDetail.packages" :key="`${pkg.registryType || 'package'}:${pkg.identifier}`">
+                                                    <div class="detail-block">
+                                                        <div class="server-card-meta compact-row">
+                                                            <span class="server-badge" x-text="pkg.registryType || 'package'"></span>
+                                                            <span class="meta-item" x-text="pkg.identifier"></span>
+                                                        </div>
+                                                        <div class="detail-subtext" x-text="`Version: ${pkg.version || 'latest'}${pkg.runtimeHint ? ` • Runtime: ${pkg.runtimeHint}` : ''}`"></div>
+                                                        <template x-if="pkg.environmentVariables?.length">
+                                                            <div class="detail-chip-row">
+                                                                <template x-for="envVar in pkg.environmentVariables" :key="envVar.name">
+                                                                    <span class="meta-pill" x-text="envVar.name + (envVar.isRequired ? ' required' : '')"></span>
+                                                                </template>
+                                                            </div>
+                                                        </template>
+                                                        <template x-if="pkg.runtimeArguments?.length || pkg.packageArguments?.length">
+                                                            <div class="detail-subtext" x-text="`Arguments: ${(pkg.runtimeArguments || []).length} runtime • ${(pkg.packageArguments || []).length} package`"></div>
+                                                        </template>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+
+                                <div class="preview-card tool-catalog-card">
+                                    <div class="detail-section-header">
+                                        <div>
+                                            <div class="preview-card-title">Tool Catalog</div>
+                                            <div class="detail-section-note" x-text="$store.mcpServersStore.registryDetailToolMessage()"></div>
+                                        </div>
+                                        <template x-if="$store.mcpServersStore.registryDetailToolCount()">
+                                            <div class="detail-summary-chip" x-text="`${$store.mcpServersStore.registryDetailToolCount()} tools`"></div>
+                                        </template>
+                                    </div>
+
+                                    <template x-if="$store.mcpServersStore.registryDetailToolCount()">
+                                        <div class="tool-catalog-grid">
+                                            <template x-for="tool in ($store.mcpServersStore.registryDetail.tools || [])" :key="tool.name">
+                                                <div class="tool-card">
+                                                    <div class="tool-card-header">
+                                                        <div class="tool-card-title" x-text="tool.name"></div>
+                                                        <span class="tool-status" :class="tool.disabled ? 'is-disabled' : 'is-enabled'" x-text="tool.disabled ? 'Disabled' : 'Enabled'"></span>
+                                                    </div>
+                                                    <div class="tool-card-description" x-text="tool.description || 'No description provided.'"></div>
+                                                    <template x-if="tool.input_schema?.properties && Object.keys(tool.input_schema.properties).length">
+                                                        <div class="tool-property-list">
+                                                            <template x-for="(prop, propName) in tool.input_schema.properties" :key="propName">
+                                                                <div class="tool-property-item">
+                                                                    <span class="prop-name" x-text="propName"></span>
+                                                                    <span class="prop-type" x-text="prop.type || 'any'"></span>
+                                                                    <template x-if="prop.description">
+                                                                        <span class="prop-desc" x-text="prop.description"></span>
+                                                                    </template>
+                                                                </div>
+                                                            </template>
+                                                        </div>
                                                     </template>
                                                 </div>
                                             </template>
                                         </div>
-                                    </div>
-                                </template>
+                                    </template>
 
-                                <template x-if="$store.mcpServersStore.registryDetail.packages?.length">
-                                    <div class="preview-card">
-                                        <div class="preview-card-title">Packages</div>
-                                        <div class="detail-stack">
-                                            <template x-for="pkg in $store.mcpServersStore.registryDetail.packages" :key="`${pkg.registryType || 'package'}:${pkg.identifier}`">
-                                                <div class="detail-block">
-                                                    <div class="server-card-meta">
-                                                        <span class="server-badge" x-text="pkg.registryType || 'package'"></span>
-                                                        <span class="meta-item" x-text="pkg.identifier"></span>
-                                                    </div>
-                                                    <div class="detail-subtext" x-text="`Version: ${pkg.version || 'latest'}${pkg.runtimeHint ? ` • Runtime: ${pkg.runtimeHint}` : ''}`"></div>
-                                                </div>
-                                            </template>
-                                        </div>
-                                    </div>
-                                </template>
+                                    <template x-if="!$store.mcpServersStore.registryDetailToolCount()">
+                                        <div class="detail-empty-state" x-text="$store.mcpServersStore.registryDetailToolMessage()"></div>
+                                    </template>
+                                </div>
 
                                 <div class="preview-card">
                                     <div class="preview-card-title">Registry JSON</div>
@@ -699,10 +780,11 @@
         .recent-update-card {
             border-radius: 16px;
             padding: 0.95rem;
-            border: 1px solid color-mix(in srgb, var(--color-secondary) 18%, var(--color-border));
+            border: 1px solid color-mix(in srgb, #db7a2c 24%, var(--color-border));
             background:
-                linear-gradient(180deg, color-mix(in srgb, var(--color-background) 95%, white 5%), var(--color-background));
-            box-shadow: 0 16px 34px rgba(3, 10, 18, 0.08);
+                radial-gradient(circle at top right, rgba(219, 122, 44, 0.2), transparent 44%),
+                linear-gradient(180deg, color-mix(in srgb, #fff5ea 78%, var(--color-background)), var(--color-background));
+            box-shadow: 0 16px 34px rgba(45, 23, 7, 0.08);
         }
 
         .recent-update-header {
@@ -1090,6 +1172,148 @@
             width: min(980px, 100%);
         }
 
+        .detail-hero-card {
+            background:
+                radial-gradient(circle at top right, color-mix(in srgb, var(--color-secondary) 20%, transparent), transparent 42%),
+                linear-gradient(180deg, color-mix(in srgb, var(--color-background) 94%, white 6%), var(--color-background));
+        }
+
+        .detail-hero-header,
+        .detail-section-header,
+        .tool-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.8rem;
+        }
+
+        .detail-hero-subtitle {
+            margin-top: 0.2rem;
+            color: var(--color-text-secondary);
+            font-size: 0.88rem;
+            overflow-wrap: anywhere;
+        }
+
+        .detail-hero-badges,
+        .detail-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+        }
+
+        .detail-hero-copy {
+            margin-top: 0.7rem;
+        }
+
+        .detail-summary-grid {
+            margin-top: 1rem;
+        }
+
+        .detail-meta-item.emphasis {
+            border-color: color-mix(in srgb, var(--color-secondary) 30%, var(--color-border));
+            background: color-mix(in srgb, var(--color-secondary) 10%, var(--color-bg-secondary));
+        }
+
+        .detail-link-row {
+            align-items: center;
+        }
+
+        .detail-section-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+            gap: 0.85rem;
+            margin-top: 0.85rem;
+        }
+
+        .detail-section-note {
+            margin-top: 0.25rem;
+            color: var(--color-text-secondary);
+            font-size: 0.88rem;
+            line-height: 1.45;
+        }
+
+        .compact-row {
+            margin-top: 0;
+        }
+
+        .detail-summary-chip {
+            padding: 0.35rem 0.65rem;
+            border-radius: 999px;
+            border: 1px solid color-mix(in srgb, var(--color-secondary) 30%, var(--color-border));
+            background: color-mix(in srgb, var(--color-secondary) 12%, var(--color-bg-secondary));
+            color: var(--color-text-primary);
+            white-space: nowrap;
+        }
+
+        .tool-catalog-card {
+            margin-top: 0.85rem;
+        }
+
+        .tool-catalog-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.9rem;
+        }
+
+        .tool-card {
+            padding: 0.85rem;
+            border-radius: 14px;
+            border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--color-bg-secondary) 84%, transparent), color-mix(in srgb, var(--color-background) 94%, transparent));
+        }
+
+        .tool-card-title {
+            font-weight: 700;
+            color: var(--color-text-primary);
+        }
+
+        .tool-card-description {
+            margin-top: 0.55rem;
+            color: var(--color-text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.45;
+        }
+
+        .tool-property-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+            margin-top: 0.8rem;
+        }
+
+        .tool-property-item {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            padding-top: 0.45rem;
+            border-top: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+            font-size: 0.84rem;
+        }
+
+        .prop-name {
+            font-weight: 700;
+            color: var(--color-text-primary);
+        }
+
+        .prop-type {
+            color: var(--color-secondary);
+        }
+
+        .prop-desc {
+            color: var(--color-text-secondary);
+        }
+
+        .detail-empty-state {
+            margin-top: 0.9rem;
+            padding: 0.95rem 1rem;
+            border-radius: 12px;
+            border: 1px dashed color-mix(in srgb, var(--color-border) 72%, transparent);
+            background: color-mix(in srgb, var(--color-bg-secondary) 74%, transparent);
+            color: var(--color-text-secondary);
+            line-height: 1.5;
+        }
+
         .install-panel-header {
             display: flex;
             align-items: flex-start;
@@ -1243,7 +1467,10 @@
             .section-toolbar,
             .recent-update-header,
             .recent-update-actions,
-            .registry-version-row {
+            .registry-version-row,
+            .detail-hero-header,
+            .detail-section-header,
+            .tool-card-header {
                 align-items: stretch;
             }
 

@@ -592,7 +592,37 @@ const model = {
         throw new Error(resp.error || "Failed to load MCP registry server details");
       }
 
-      this.registryDetail = resp.data || null;
+      const detail = resp.data || {};
+      const resolvedVersion = detail.version || version || "latest";
+      const installed = this.installedRegistryVersion(serverName, resolvedVersion);
+      this.registryDetail = {
+        ...detail,
+        tools: [],
+        toolLoadError: "",
+        toolsSource: installed ? "installed-runtime" : "registry-unavailable",
+        installedMatch: installed ? {
+          name: installed.name,
+          runtime_name: installed.runtime_name,
+        } : null,
+      };
+
+      if (installed) {
+        const toolResp = await API.callJsonApi("mcp_server_get_detail", {
+          server_name: installed.runtime_name,
+        });
+        if (toolResp.success) {
+          this.registryDetail = {
+            ...this.registryDetail,
+            description: toolResp.detail?.description || this.registryDetail.description,
+            tools: Array.isArray(toolResp.detail?.tools) ? toolResp.detail.tools : [],
+          };
+        } else {
+          this.registryDetail = {
+            ...this.registryDetail,
+            toolLoadError: toolResp.error || "Tool metadata could not be loaded from the installed MCP server.",
+          };
+        }
+      }
     } catch (error) {
       this.registryDetailError = error?.message || "Failed to load MCP registry server details";
     } finally {
@@ -609,6 +639,22 @@ const model = {
 
   registryDetailJson() {
     return this.registryDetail ? JSON.stringify(this.registryDetail, null, 2) : "";
+  },
+
+  registryDetailToolCount() {
+    return Array.isArray(this.registryDetail?.tools) ? this.registryDetail.tools.length : 0;
+  },
+
+  registryDetailToolMessage() {
+    if (!this.registryDetail) return "";
+    if (this.registryDetail.toolLoadError) return this.registryDetail.toolLoadError;
+    if (this.registryDetail.installedMatch) {
+      if (this.registryDetailToolCount() > 0) {
+        return `Loaded from installed server ${this.registryDetail.installedMatch.name}.`;
+      }
+      return "This installed MCP server returned no tools for the selected version.";
+    }
+    return "Tool definitions are not published by the MCP registry for this version. Install this version to inspect runtime tools and descriptions.";
   },
 
   isRegistryUpdateAvailable(server) {
