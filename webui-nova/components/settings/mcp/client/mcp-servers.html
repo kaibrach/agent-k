@@ -1,191 +1,601 @@
 <html>
-
 <head>
-    <title>MCP Servers Configuration</title>
-
+    <title>MCP Servers</title>
     <script type="module">
         import { store } from "/components/settings/mcp/client/mcp-servers-store.js";
     </script>
 </head>
-
 <body>
     <div x-data>
         <template x-if="$store.mcpServersStore">
             <div x-init="$store.mcpServersStore.initialize()" x-destroy="$store.mcpServersStore.onClose()">
+                <ul class="nav nav-tabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link"
+                            :class="{ active: $store.mcpServersStore.activeTab === 'installed' }"
+                            @click="$store.mcpServersStore.setActiveTab('installed')">
+                            <span class="material-symbols-outlined tab-icon">hub</span> Installed
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link"
+                            :class="{ active: $store.mcpServersStore.activeTab === 'browse' }"
+                            @click="$store.mcpServersStore.setActiveTab('browse')">
+                            <span class="material-symbols-outlined tab-icon">storefront</span> Browse Registry
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link"
+                            :class="{ active: $store.mcpServersStore.activeTab === 'json' }"
+                            @click="$store.mcpServersStore.setActiveTab('json')">
+                            <span class="material-symbols-outlined tab-icon">data_object</span> JSON
+                        </button>
+                    </li>
+                </ul>
 
-                <h3>MCP Servers Configuration JSON
-                    <button class="btn slim" style="margin-left: 0.5em;"
-                        onclick="openModal('settings/mcp/client/example.html')">Examples</button>
-                    <button class="btn slim" style="margin-left: 0.5em;"
-                        @click="$store.mcpServersStore.formatJson()">Reformat</button>
-                    <button class="btn slim primary" :disabled="$store.mcpServersStore.loading"
-                        style="margin-left: 0.5em;" @click="$store.mcpServersStore.applyNow()">Apply now</button>
-                </h3>
-                <div id="mcp-servers-config-json"></div>
+                <template x-if="$store.mcpServersStore.activeTab === 'installed'">
+                    <div>
+                        <div class="section-title">Installed MCP Servers</div>
+                        <div class="section-description">
+                            Manage configured MCP servers, toggle them on or off, and inspect or disable individual tools.
+                        </div>
 
-                <h3 id="mcp-servers-status">Servers status (refreshing automatically)</h3>
+                        <div class="toolbar-row">
+                            <button class="button" @click="$store.mcpServersStore.refreshInstalledServers()">
+                                <span class="icon material-symbols-outlined">refresh</span> Refresh View
+                            </button>
+                            <button class="button primary" :disabled="$store.mcpServersStore.loading"
+                                @click="$store.mcpServersStore.applyNow()">
+                                <span class="icon material-symbols-outlined">play_circle</span> Apply Now
+                            </button>
+                        </div>
 
+                        <div x-show="$store.mcpServersStore.loading" class="loading">Loading MCP server status...</div>
 
-                <div class="server-list" x-show="!$store.mcpServersStore.loading">
-                    <template x-for="server in $store.mcpServersStore.servers" :key="server.name">
-                        <div class="server-item">
-                            <div class="server-main-row">
-                                <!-- Status indicator -->
-                                <div class="status-dot" x-data="{ connected: server.connected }">
-                                    <svg viewBox="0 0 16 16" width="12" height="12">
-                                        <circle cx="8" cy="8" r="6" x-bind:fill="server.connected 
-                                                ? (server.error ? '#e40138' : (server.tool_count > 0 ? '#00c340' : '#e40138')) 
-                                                : 'none'" x-bind:opacity="server.connected ? 1 : 0" />
-                                        <circle cx="8" cy="8" r="6" fill="none" stroke="#e40138" stroke-width="2"
-                                            x-bind:opacity="server.connected ? 0 : 1" />
-                                    </svg>
+                        <template x-if="!$store.mcpServersStore.loading && $store.mcpServersStore.installedServers.length === 0">
+                            <div class="empty-state">No MCP servers are configured yet.</div>
+                        </template>
+
+                        <div class="server-grid">
+                            <template x-for="server in $store.mcpServersStore.installedServers" :key="server.name">
+                                <div class="server-card">
+                                    <div class="server-card-header">
+                                        <div class="server-card-title-wrap">
+                                            <div class="server-card-title" x-text="server.name"></div>
+                                            <div class="server-card-badges">
+                                                <span class="server-badge" x-text="server.type || 'stdio'"></span>
+                                                <template x-if="server.registry_name">
+                                                    <span class="server-badge badge-accent">Registry</span>
+                                                </template>
+                                                <template x-if="server.disabled">
+                                                    <span class="server-badge badge-danger">Disabled</span>
+                                                </template>
+                                            </div>
+                                        </div>
+                                        <div class="server-card-actions">
+                                            <select class="server-toggle"
+                                                :value="server.disabled ? 'disabled' : 'enabled'"
+                                                @change="$store.mcpServersStore.setServerEnabled(server.name, $event.target.value === 'enabled')">
+                                                <option value="enabled">ON</option>
+                                                <option value="disabled">OFF</option>
+                                            </select>
+                                            <button class="button" :disabled="server.disabled || server.tool_count === 0"
+                                                @click="$store.mcpServersStore.onToolCountClick(server.name)">
+                                                <span class="icon material-symbols-outlined">build_circle</span>
+                                                <span x-text="`${server.tool_count}/${server.total_tool_count} tools`"></span>
+                                            </button>
+                                            <button class="button" x-show="server.has_log"
+                                                @click="$store.mcpServersStore.getServerLog(server.name)">
+                                                <span class="icon material-symbols-outlined">description</span> Log
+                                            </button>
+                                            <button class="button danger"
+                                                @click="$confirmClick($event, () => $store.mcpServersStore.removeServer(server.name))">
+                                                <span class="icon material-symbols-outlined">delete</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="server-card-description" x-text="server.description"></div>
+                                    <div class="server-card-meta">
+                                        <span class="meta-item" x-text="server.connected ? 'Connected' : 'Not connected'"></span>
+                                        <template x-if="server.error">
+                                            <span class="meta-item meta-error" x-text="server.error"></span>
+                                        </template>
+                                        <template x-if="server.registry_name">
+                                            <span class="meta-item" x-text="server.registry_name"></span>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <template x-if="$store.mcpServersStore.activeTab === 'browse'">
+                    <div>
+                        <div class="section-title">Official MCP Registry</div>
+                        <div class="section-description">
+                            Search the official MCP registry and install supported servers directly into Nova's MCP configuration.
+                        </div>
+
+                        <div class="toolbar-row browse-toolbar">
+                            <input class="search-input" type="text"
+                                x-model="$store.mcpServersStore.registryQuery"
+                                @input="$store.mcpServersStore.scheduleRegistrySearch()"
+                                placeholder="Search MCP servers by name" />
+                            <button class="button" :disabled="$store.mcpServersStore.registryLoading"
+                                @click="$store.mcpServersStore.loadRegistryServers()">
+                                <span class="icon material-symbols-outlined">search</span>
+                                <span x-text="$store.mcpServersStore.registryLoading ? 'Searching...' : 'Search'"></span>
+                            </button>
+                        </div>
+
+                        <div x-show="$store.mcpServersStore.registryError" class="error-banner" x-text="$store.mcpServersStore.registryError"></div>
+                        <div x-show="$store.mcpServersStore.registryLoading" class="loading">Loading registry servers...</div>
+
+                        <template x-if="!$store.mcpServersStore.registryLoading && $store.mcpServersStore.registryServers.length === 0 && !$store.mcpServersStore.registryError">
+                            <div class="empty-state">No registry servers found.</div>
+                        </template>
+
+                        <div class="server-grid">
+                            <template x-for="server in $store.mcpServersStore.registryServers" :key="server.name">
+                                <div class="server-card registry-card">
+                                    <div class="server-card-header">
+                                        <div class="server-card-title-wrap">
+                                            <div class="server-card-title" x-text="server.title || server.name"></div>
+                                            <div class="server-card-badges">
+                                                <span class="server-badge badge-accent" x-text="server.version || 'latest'"></span>
+                                                <template x-if="server.remotes?.length">
+                                                    <span class="server-badge">Remote</span>
+                                                </template>
+                                                <template x-if="server.packages?.length">
+                                                    <span class="server-badge">Package</span>
+                                                </template>
+                                            </div>
+                                        </div>
+                                        <div class="server-card-actions">
+                                            <button class="button primary"
+                                                @click="$store.mcpServersStore.openInstallDialog(server.name)">
+                                                <span class="icon material-symbols-outlined">download</span>
+                                                <span x-text="$store.mcpServersStore.installedRegistryServer(server.name) ? 'Install Copy' : 'Install'"></span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="server-card-description" x-text="server.description || 'No description provided.'"></div>
+                                    <div class="server-card-meta">
+                                        <span class="meta-item" x-text="server.name"></span>
+                                        <template x-if="server.status">
+                                            <span class="meta-item" x-text="server.status"></span>
+                                        </template>
+                                        <template x-if="server.repository?.url">
+                                            <a class="meta-link" :href="server.repository.url" target="_blank" rel="noreferrer">Repository</a>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <template x-if="$store.mcpServersStore.activeTab === 'json'">
+                    <div>
+                        <div class="section-title">MCP Configuration JSON</div>
+                        <div class="section-description">
+                            Edit the raw MCP configuration directly. This remains the source of truth used by the Installed and Browse tabs.
+                        </div>
+
+                        <div class="toolbar-row">
+                            <button class="button" onclick="openModal('settings/mcp/client/example.html')">Examples</button>
+                            <button class="button" @click="$store.mcpServersStore.formatJson()">Reformat</button>
+                            <button class="button primary" :disabled="$store.mcpServersStore.loading"
+                                @click="$store.mcpServersStore.applyNow()">Apply Now</button>
+                        </div>
+                        <div id="mcp-servers-config-json"></div>
+                    </div>
+                </template>
+
+                <div class="install-mask"
+                    x-show="$store.mcpServersStore.installDialogOpen"
+                    x-transition.opacity
+                    style="display:none;"
+                    @click.self="$store.mcpServersStore.closeInstallDialog()">
+                    <div class="install-panel">
+                        <div class="install-panel-header">
+                            <div>
+                                <div class="section-title">Install MCP Server</div>
+                                <div class="section-description" x-text="$store.mcpServersStore.installDetail?.name || 'Loading registry server details'"></div>
+                            </div>
+                            <button class="button icon-button" @click="$store.mcpServersStore.closeInstallDialog()">
+                                <span class="icon material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div x-show="$store.mcpServersStore.installDialogLoading" class="loading">Loading install options...</div>
+                        <div x-show="$store.mcpServersStore.installDialogError" class="error-banner" x-text="$store.mcpServersStore.installDialogError"></div>
+
+                        <template x-if="$store.mcpServersStore.installDetail && !$store.mcpServersStore.installDialogLoading">
+                            <div>
+                                <div class="preview-card">
+                                    <div class="preview-card-title" x-text="$store.mcpServersStore.installDetail.title || $store.mcpServersStore.installDetail.name"></div>
+                                    <div class="server-card-description" x-text="$store.mcpServersStore.installDetail.description"></div>
                                 </div>
 
-                                <!-- Server name -->
-                                <span class="server-name" x-text="server.name"></span>
+                                <div class="install-option-list">
+                                    <template x-for="option in $store.mcpServersStore.installOptions" :key="option.key">
+                                        <button class="install-option"
+                                            :class="{ active: $store.mcpServersStore.installOptionKey === option.key, unsupported: !option.supported }"
+                                            @click="$store.mcpServersStore.selectInstallOption(option.key)">
+                                            <span class="install-option-title" x-text="option.label"></span>
+                                            <span class="install-option-description" x-text="option.description"></span>
+                                            <template x-if="!option.supported">
+                                                <span class="install-option-note" x-text="option.unsupportedReason"></span>
+                                            </template>
+                                        </button>
+                                    </template>
+                                </div>
 
-                                <!-- Tool count (clickable if > 0, only for connected servers without errors) -->
-                                <span class="tool-count" x-show="server.tool_count > 0"
-                                    @click="$store.mcpServersStore.onToolCountClick && $store.mcpServersStore.onToolCountClick(server.name)"
-                                    x-text="server.tool_count + ' tools'"></span>
+                                <template x-if="$store.mcpServersStore.selectedInstallOption()?.inputs?.length">
+                                    <div class="options-card">
+                                        <template x-for="input in $store.mcpServersStore.selectedInstallOption().inputs" :key="input.id">
+                                            <label class="field-row">
+                                                <span class="field-row-label" x-text="input.label"></span>
+                                                <div class="field-row-control">
+                                                    <input
+                                                        class="text-input"
+                                                        :type="input.secret ? 'password' : (input.format === 'number' ? 'number' : 'text')"
+                                                        :placeholder="input.description || input.label"
+                                                        x-model="$store.mcpServersStore.installInputValues[input.id]" />
+                                                    <div class="field-row-help">
+                                                        <span x-text="input.description || ''"></span>
+                                                        <template x-if="input.required"><span>Required</span></template>
+                                                    </div>
+                                                </div>
+                                            </label>
+                                        </template>
+                                    </div>
+                                </template>
 
-                                <!-- Log button (only shown if has_log is true) -->
-                                <span class="log-btn" x-show="server.has_log"
-                                    @click="$store.mcpServersStore.getServerLog(server.name)">Log</span>
+                                <template x-if="$store.mcpServersStore.installPreviewConfig()">
+                                    <div class="preview-card">
+                                        <div class="preview-card-title">Generated Config</div>
+                                        <pre class="config-preview" x-text="$store.mcpServersStore.installPreviewConfig()"></pre>
+                                    </div>
+                                </template>
+
+                                <div class="toolbar-row toolbar-end">
+                                    <button class="button" @click="$store.mcpServersStore.closeInstallDialog()">Cancel</button>
+                                    <button class="button primary" @click="$store.mcpServersStore.confirmInstall()">Install Server</button>
+                                </div>
                             </div>
-
-                            <!-- Error message (if any) -->
-                            <div class="server-error-row" x-show="server.error">
-                                <span class="server-error" x-text="server.error"></span>
-                            </div>
-                        </div>
-                    </template>
-                    <div x-show="$store.mcpServersStore.servers.length === 0" class="mcp-servers-loading">
-                        No servers
+                        </template>
                     </div>
-                </div>
-
-                <div x-show="$store.mcpServersStore.loading" class="mcp-servers-loading">
-                    Loading servers status...
                 </div>
             </div>
         </template>
     </div>
 
     <style>
-
-    .modal-inner .modal-scroll {
-        scrollbar-width: none;
-        -ms-overflow-style: none;
-    }
-
-    .modal-inner .modal-scroll::-webkit-scrollbar {
-        display: none;
-    }
-
-    .mcp-servers-loading {
-        width: 100%;
-        text-align: center;
-        margin-top: 2rem;
-        margin-bottom: 2rem;
-    }
         #mcp-servers-config-json {
             width: 100%;
-            height: 40em;
+            height: 36em;
+            margin-top: 0.75rem;
         }
 
-        .server-list {
-            margin-top: 0.5em;
-            margin-bottom: 1em;
-        }
-
-        .server-item {
+        .nav {
             display: flex;
-            flex-direction: column;
-            padding: 0.5em 0.7em;
-            margin-bottom: 0.4em;
-            min-height: 2.2em;
-            /* Ensure consistent height even without errors */
-            border: 1px solid rgba(192, 192, 192, 0.161);
-            /* Silver with 30% opacity */
-            border-radius: 4px;
+            padding-left: 0;
+            margin: 0 0 1rem 0;
+            list-style: none;
+            border-bottom: 1px solid var(--color-border);
+            gap: 0.25rem;
         }
 
-        .server-list {
-            margin-top: 0.5em;
-            margin-bottom: 1em;
-            display: flex;
-            flex-direction: column;
-            gap: 0.2em;
+        .nav-link {
+            font-family: var(--font-family-body);
+            border: 1px solid transparent;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            padding: 0.4rem 0.7rem;
+            background: transparent;
+            color: var(--color-text-secondary);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
         }
 
-        .server-main-row {
+        .nav-link.active {
+            color: var(--color-text-primary);
+            border-color: var(--color-border);
+            border-bottom-color: transparent;
+            background: var(--color-background);
+        }
+
+        .tab-icon {
+            font-size: 1.05rem;
+        }
+
+        .toolbar-row {
             display: flex;
             align-items: center;
-            gap: 0.8em;
-            width: 100%;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            margin-top: 0.75rem;
+            margin-bottom: 0.75rem;
         }
 
-        .status-dot {
+        .toolbar-end {
+            justify-content: flex-end;
+        }
+
+        .browse-toolbar .search-input {
+            flex: 1 1 22rem;
+        }
+
+        .search-input,
+        .text-input,
+        .server-toggle {
+            width: 100%;
+            padding: 0.45rem 0.7rem;
+            border: 1px solid var(--color-border);
+            border-radius: 4px;
+            background: var(--color-background);
+            color: var(--color-text-primary);
+        }
+
+        .server-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0.75rem;
+            margin-top: 0.75rem;
+        }
+
+        .server-card,
+        .preview-card,
+        .options-card {
+            border: 1px solid var(--color-border);
+            border-radius: 12px;
+            padding: 0.85rem;
+            background: var(--color-background);
+        }
+
+        .server-card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+
+        .server-card-title-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+
+        .server-card-title,
+        .preview-card-title {
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--color-text-primary);
+        }
+
+        .server-card-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }
+
+        .server-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.15rem 0.45rem;
+            border-radius: 999px;
+            border: 1px solid var(--color-border);
+            background: var(--color-bg-secondary);
+            color: var(--color-text-secondary);
+            font-size: 0.75rem;
+        }
+
+        .badge-accent {
+            color: var(--color-secondary);
+            border-color: color-mix(in srgb, var(--color-secondary) 35%, var(--color-border));
+        }
+
+        .badge-danger {
+            color: var(--color-error);
+            border-color: color-mix(in srgb, var(--color-error) 35%, var(--color-border));
+        }
+
+        .server-card-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            justify-content: flex-end;
+        }
+
+        .server-card-description {
+            margin-top: 0.6rem;
+            color: var(--color-text-secondary);
+            font-size: var(--font-size-small);
+            line-height: 1.45;
+        }
+
+        .server-card-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            margin-top: 0.7rem;
+        }
+
+        .meta-item,
+        .meta-link {
+            font-size: 0.82rem;
+            color: var(--color-text-secondary);
+        }
+
+        .meta-link {
+            text-decoration: none;
+        }
+
+        .meta-link:hover {
+            text-decoration: underline;
+        }
+
+        .meta-error {
+            color: var(--color-error);
+        }
+
+        .empty-state,
+        .loading {
+            text-align: center;
+            padding: 1rem;
+            color: var(--color-text-secondary);
+        }
+
+        .error-banner {
+            margin-top: 0.75rem;
+            padding: 0.65rem 0.8rem;
+            border-radius: 8px;
+            background: var(--color-error-bg);
+            color: var(--color-error);
+        }
+
+        .danger {
+            color: var(--color-error);
+        }
+
+        .install-mask {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 1rem;
+            background: color-mix(in srgb, #08121d 64%, transparent);
+            backdrop-filter: blur(8px);
         }
 
-        .server-name {
+        .install-panel {
+            width: min(860px, 100%);
+            max-height: min(92vh, 920px);
+            overflow: auto;
+            padding: 1rem;
+            border-radius: 16px;
+            border: 1px solid color-mix(in srgb, var(--color-secondary) 18%, var(--color-border));
+            background: linear-gradient(180deg, color-mix(in srgb, var(--color-background) 95%, white 5%), var(--color-background));
+            box-shadow: 0 28px 64px rgba(3, 10, 18, 0.35);
+        }
+
+        .install-panel-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+
+        .install-option-list {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0.6rem;
+            margin-top: 1rem;
+        }
+
+        .install-option {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.25rem;
+            width: 100%;
+            padding: 0.75rem;
+            text-align: left;
+            border-radius: 10px;
+            border: 1px solid var(--color-border);
+            background: var(--color-background);
+            color: var(--color-text-primary);
+            cursor: pointer;
+        }
+
+        .install-option.active {
+            border-color: color-mix(in srgb, var(--color-secondary) 35%, var(--color-border));
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-secondary) 30%, transparent);
+        }
+
+        .install-option.unsupported {
+            opacity: 0.7;
+        }
+
+        .install-option-title {
             font-weight: 600;
-            min-width: 12em;
         }
 
-        .tool-count {
-            color: var(--c-fg2);
-            font-size: 0.9em;
-            user-select: none;
+        .install-option-description,
+        .install-option-note {
+            font-size: 0.85rem;
+            color: var(--color-text-secondary);
         }
 
-        .tool-count {
-            cursor: default;
+        .install-option-note {
+            color: var(--color-error);
         }
 
-        .tool-count:hover {
-            opacity: 0.8;
-            cursor: pointer;
+        .field-row {
+            display: grid;
+            grid-template-columns: minmax(10rem, 14rem) 1fr;
+            column-gap: 0.75rem;
+            align-items: start;
+            margin-top: 0.65rem;
         }
 
-        .config-status {
-            color: #e40138;
-            font-size: 0.85em;
-            opacity: 0.8;
+        .field-row-label {
+            font-weight: 600;
+            color: var(--color-text-primary);
+            padding-top: 0.45rem;
         }
 
-        .log-btn {
-            margin-left: auto;
-            font-size: 0.9em;
-            cursor: pointer;
-            text-decoration: none;
-            opacity: 0.85;
+        .field-row-help {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.3rem;
+            font-size: 0.8rem;
+            color: var(--color-text-secondary);
         }
 
-        .log-btn:hover {
-            opacity: 1;
+        .config-preview {
+            margin: 0.75rem 0 0;
+            padding: 0.75rem;
+            border-radius: 10px;
+            background: color-mix(in srgb, var(--color-bg-secondary) 75%, transparent);
+            border: 1px solid var(--color-border);
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            font-size: 0.85rem;
         }
 
-        .server-error-row {
-            margin-left: 1.8em;
-            margin-top: 0.1em;
-            font-size: 0.8em;
-            color: #F44336;
-            opacity: 0.85;
-            line-height: 1.2;
-        }
+        @media (max-width: 760px) {
+            .server-card-header,
+            .install-panel-header,
+            .field-row {
+                grid-template-columns: 1fr;
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+            }
 
-        .no-servers {
-            padding: 0.5em;
-            color: var(--c-fg2);
-            font-style: italic;
+            .server-card-actions,
+            .toolbar-end {
+                justify-content: stretch;
+            }
+
+            .server-card-actions .button,
+            .toolbar-row .button,
+            .toolbar-row .search-input,
+            .toolbar-end .button {
+                width: 100%;
+            }
         }
     </style>
-
 </body>
-
 </html>

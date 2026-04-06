@@ -230,6 +230,7 @@ class MCPServerRemote(BaseModel):
     tool_timeout: int = Field(default=0)
     verify: bool = Field(default=True, description="Verify SSL certificates")
     disabled: bool = Field(default=False)
+    disabled_tools: list[str] = Field(default_factory=list)
 
     __lock: ClassVar[threading.Lock] = PrivateAttr(default=threading.Lock())
     __client: Optional["MCPClientRemote"] = PrivateAttr(default=None)
@@ -247,10 +248,14 @@ class MCPServerRemote(BaseModel):
         with self.__lock:
             return self.__client.get_log()  # type: ignore
 
-    def get_tools(self) -> List[dict[str, Any]]:
-        """Get all tools from the server"""
+    def get_tools(self, include_disabled: bool = False) -> List[dict[str, Any]]:
+        """Get tools from the server, optionally including disabled ones."""
         with self.__lock:
-            return self.__client.tools  # type: ignore
+            return self.__client.get_tools(include_disabled=include_disabled)  # type: ignore
+
+    def get_disabled_tools(self) -> list[str]:
+        with self.__lock:
+            return list(self.disabled_tools)
 
     def has_tool(self, tool_name: str) -> bool:
         """Check if a tool is available"""
@@ -278,6 +283,7 @@ class MCPServerRemote(BaseModel):
                     "init_timeout",
                     "tool_timeout",
                     "disabled",
+                    "disabled_tools",
                     "verify",
                 ]:
                     if key == "name":
@@ -308,6 +314,7 @@ class MCPServerLocal(BaseModel):
     tool_timeout: int = Field(default=0)
     verify: bool = Field(default=True, description="Verify SSL certificates")
     disabled: bool = Field(default=False)
+    disabled_tools: list[str] = Field(default_factory=list)
 
     __lock: ClassVar[threading.Lock] = PrivateAttr(default=threading.Lock())
     __client: Optional["MCPClientLocal"] = PrivateAttr(default=None)
@@ -325,10 +332,14 @@ class MCPServerLocal(BaseModel):
         with self.__lock:
             return self.__client.get_log()  # type: ignore
 
-    def get_tools(self) -> List[dict[str, Any]]:
-        """Get all tools from the server"""
+    def get_tools(self, include_disabled: bool = False) -> List[dict[str, Any]]:
+        """Get tools from the server, optionally including disabled ones."""
         with self.__lock:
-            return self.__client.tools  # type: ignore
+            return self.__client.get_tools(include_disabled=include_disabled)  # type: ignore
+
+    def get_disabled_tools(self) -> list[str]:
+        with self.__lock:
+            return list(self.disabled_tools)
 
     def has_tool(self, tool_name: str) -> bool:
         """Check if a tool is available"""
@@ -358,6 +369,7 @@ class MCPServerLocal(BaseModel):
                     "init_timeout",
                     "tool_timeout",
                     "disabled",
+                    "disabled_tools",
                 ]:
                     if key == "name":
                         value = normalize_name(value)
@@ -672,6 +684,9 @@ class MCPConfig(BaseModel):
                         "connected": connected,
                         "error": error,
                         "tool_count": tool_count,
+                        "total_tool_count": len(server.get_tools(include_disabled=True)),
+                        "disabled": False,
+                        "disabled_tools": server.get_disabled_tools(),
                         "has_log": has_log,
                     }
                 )
@@ -684,6 +699,9 @@ class MCPConfig(BaseModel):
                         "connected": False,
                         "error": disconnected["error"],
                         "tool_count": 0,
+                        "total_tool_count": 0,
+                        "disabled": disconnected["error"] == "Disabled in config",
+                        "disabled_tools": disconnected["config"].get("disabled_tools", []) if isinstance(disconnected.get("config"), dict) else [],
                         "has_log": False,
                     }
                 )
@@ -695,13 +713,19 @@ class MCPConfig(BaseModel):
             for server in self.servers:
                 if server.name == server_name:
                     try:
-                        tools = server.get_tools()
+                        tools = server.get_tools(include_disabled=True)
                     except Exception:
                         tools = []
+                    disabled_tools = set(server.get_disabled_tools())
                     return {
                         "name": server.name,
                         "description": server.description,
-                        "tools": tools,
+                        "disabled": server.disabled,
+                        "disabled_tools": list(disabled_tools),
+                        "tools": [
+                            {**tool, "disabled": tool.get("name") in disabled_tools}
+                            for tool in tools
+                        ],
                     }
             return {}
 
@@ -822,6 +846,10 @@ class MCPClientBase(ABC):
         self.log: List[str] = []
         self.log_file: Optional[TextIO] = None
 
+    def _disabled_tools_set(self) -> set[str]:
+        disabled = getattr(self.server, "disabled_tools", []) or []
+        return {str(name) for name in disabled}
+
     # Protected method
     @abstractmethod
     async def _create_stdio_transport(
@@ -938,15 +966,20 @@ class MCPClientBase(ABC):
     def has_tool(self, tool_name: str) -> bool:
         """Check if a tool is available (uses cached tools)"""
         with self.__lock:
+            if tool_name in self._disabled_tools_set():
+                return False
             for tool in self.tools:
                 if tool["name"] == tool_name:
                     return True
         return False
 
-    def get_tools(self) -> List[dict[str, Any]]:
-        """Get all tools from the server (uses cached tools)"""
+    def get_tools(self, include_disabled: bool = False) -> List[dict[str, Any]]:
+        """Get cached tools from the server, optionally including disabled tools."""
         with self.__lock:
-            return self.tools
+            if include_disabled:
+                return self.tools
+            disabled = self._disabled_tools_set()
+            return [tool for tool in self.tools if tool.get("name") not in disabled]
 
     async def call_tool(
         self, tool_name: str, input_data: Dict[str, Any]
