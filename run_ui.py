@@ -8,13 +8,13 @@ from helpers.ui_server import UiServerRuntime, configure_process_environment
 configure_process_environment()
 
 
-def run():
+def run(ui_root: str = "webui-nova"):
     PrintStyle().print("Initializing Python framework...")
     PrintStyle().print("Checking for data migration...")
     run_migration_checks()
 
     PrintStyle().print("Preparing web server runtime...")
-    server_runtime, host, port = prepare_web_runtime()
+    server_runtime, host, port = prepare_web_runtime(ui_root=ui_root)
 
     PrintStyle().print("Initializing Agent Zero components...")
     init_a0()
@@ -27,12 +27,12 @@ def run_migration_checks() -> None:
     initialize.initialize_migration()
 
 
-def prepare_web_runtime() -> tuple[UiServerRuntime, str, int]:
+def prepare_web_runtime(ui_root: str = "webui") -> tuple[UiServerRuntime, str, int]:
     host = (
         runtime.get_arg("host") or dotenv.get_dotenv_value("WEB_UI_HOST") or "localhost"
     )
     port = runtime.get_web_ui_port()
-    server_runtime = UiServerRuntime.create()
+    server_runtime = UiServerRuntime.create(ui_root=ui_root)
     server_runtime.register_http_routes()
     server_runtime.register_transport_handlers()
 
@@ -85,4 +85,4 @@ def init_a0():
 if __name__ == "__main__":
     runtime.initialize()
     dotenv.load_dotenv()
-    run()
+    run("webui-nova")
