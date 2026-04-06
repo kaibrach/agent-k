@@ -79,7 +79,7 @@
                                                 <option value="enabled">ON</option>
                                                 <option value="disabled">OFF</option>
                                             </select>
-                                            <button class="button" :disabled="server.disabled || server.tool_count === 0"
+                                            <button class="button" :disabled="server.disabled || server.total_tool_count === 0"
                                                 @click="$store.mcpServersStore.onToolCountClick(server.runtime_name)">
                                                 <span class="icon material-symbols-outlined">build_circle</span>
                                                 <span x-text="`${server.tool_count}/${server.total_tool_count} tools`"></span>
@@ -100,8 +100,10 @@
                                     </div>
                                     <div class="server-card-description" x-text="server.description"></div>
                                     <div class="server-card-meta">
-                                        <span class="meta-item" x-text="server.connected ? 'Connected' : 'Not connected'"></span>
-                                        <template x-if="server.error">
+                                        <span class="meta-item status-indicator"
+                                            :class="`status-${server.health}`"
+                                            x-text="server.disabled ? 'Disabled' : (server.connected ? 'Running' : (server.error ? 'Error' : 'Not connected'))"></span>
+                                        <template x-if="!server.disabled && server.error">
                                             <span class="meta-item meta-error" x-text="server.error"></span>
                                         </template>
                                         <template x-if="server.registry_name">
@@ -446,6 +448,36 @@
         .meta-link {
             font-size: 0.82rem;
             color: var(--color-text-secondary);
+        }
+
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .status-indicator::before {
+            content: "";
+            width: 0.55rem;
+            height: 0.55rem;
+            border-radius: 999px;
+            background: #7c8c9f;
+            box-shadow: 0 0 0 3px rgba(124, 140, 159, 0.14);
+        }
+
+        .status-connected::before {
+            background: #2b8a57;
+            box-shadow: 0 0 0 3px rgba(43, 138, 87, 0.16);
+        }
+
+        .status-error::before {
+            background: #b02b2b;
+            box-shadow: 0 0 0 3px rgba(176, 43, 43, 0.14);
+        }
+
+        .status-disabled::before {
+            background: #d07b26;
+            box-shadow: 0 0 0 3px rgba(208, 123, 38, 0.16);
         }
 
         .meta-link {

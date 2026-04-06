@@ -729,6 +729,24 @@ class MCPConfig(BaseModel):
                     }
             return {}
 
+    def set_server_disabled_tools(self, server_name: str, disabled_tools: list[str]) -> bool:
+        normalized_name = normalize_name(server_name)
+        sanitized_tools = sorted({str(name) for name in (disabled_tools or []) if str(name).strip()})
+        with self.__lock:
+            for server in self.servers:
+                if server.name == normalized_name:
+                    server.disabled_tools = sanitized_tools
+                    return True
+
+            for disconnected in self.disconnected_servers:
+                if disconnected.get("name") == normalized_name:
+                    config = disconnected.get("config")
+                    if isinstance(config, dict):
+                        config["disabled_tools"] = sanitized_tools
+                    return True
+
+        return False
+
     def is_initialized(self) -> bool:
         """Check if the client is initialized"""
         with self.__lock:

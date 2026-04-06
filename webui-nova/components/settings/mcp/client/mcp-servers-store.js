@@ -81,6 +81,7 @@ const model = {
   registrySearchTimer: null,
   serverLog: "",
   serverDetail: null,
+  serverDetailError: "",
   installDialogOpen: false,
   installDialogLoading: false,
   installDialogError: "",
@@ -161,18 +162,22 @@ const model = {
       const runtimeName = normalizeServerName(name);
       const status = this.statusByName[runtimeName] || this.statusByName[name] || {};
       const disabledTools = Array.isArray(config.disabled_tools) ? config.disabled_tools : [];
+      const disabled = Boolean(config.disabled || status.disabled);
+      const connected = Boolean(status.connected);
+      const error = status.error || "";
       return {
         name,
         runtime_name: runtimeName,
         config,
         description: config.description || status.description || "No description provided.",
         type: config.type || (config.url ? "streamable-http" : "stdio"),
-        disabled: Boolean(config.disabled),
+        disabled,
         disabled_tools: disabledTools,
         tool_count: status.tool_count ?? 0,
         total_tool_count: status.total_tool_count ?? status.tool_count ?? 0,
-        connected: Boolean(status.connected),
-        error: status.error || "",
+        connected,
+        error,
+        health: disabled ? "disabled" : (connected ? "connected" : (error ? "error" : "idle")),
         has_log: Boolean(status.has_log),
         registry_name: config.registry_name || "",
         registry_version: config.registry_version || "",
@@ -291,6 +296,7 @@ const model = {
   },
 
   async setToolEnabled(serverName, toolName, enabled) {
+    const previousConfig = this.getEditorValue();
     const next = this.parseConfigObject();
     const configKey = this.findConfigKey(serverName);
     const config = next.mcpServers?.[configKey];
@@ -308,13 +314,56 @@ const model = {
       delete config.disabled_tools;
     }
     this.setConfigObject(next);
-    await this.applyNow();
-    if (this.serverDetail?.name === serverName || this.serverDetail?.runtime_name === serverName) {
-      this.serverDetail.disabled_tools = nextDisabled;
-      this.serverDetail.tools = (this.serverDetail.tools || []).map((tool) => ({
-        ...tool,
-        disabled: nextDisabled.includes(tool.name),
-      }));
+    try {
+      const resp = await API.callJsonApi("mcp_server_set_tools", {
+        server_name: configKey,
+        disabled_tools: nextDisabled,
+      });
+      if (!resp.success) {
+        throw new Error(resp.error || "Failed to update MCP tools");
+      }
+
+      if (settingsStore.settings && resp.mcp_servers) {
+        settingsStore.settings.mcp_servers = resp.mcp_servers;
+      }
+
+      if (resp.status) {
+        const map = {};
+        for (const item of resp.status || []) {
+          map[item.name] = item;
+        }
+        this.statusByName = map;
+      } else {
+        await this._statusCheck();
+      }
+
+      if (this.serverDetail?.name === serverName || this.serverDetail?.runtime_name === serverName) {
+        const detail = resp.detail || {};
+        this.serverDetail = {
+          ...this.serverDetail,
+          ...detail,
+          runtime_name: this.serverDetail.runtime_name,
+          config_name: this.serverDetail.config_name,
+          tools: Array.isArray(detail.tools)
+            ? detail.tools
+            : (this.serverDetail.tools || []).map((tool) => ({
+                ...tool,
+                disabled: nextDisabled.includes(tool.name),
+              })),
+        };
+      }
+      this.refreshInstalledServers();
+    } catch (error) {
+      try {
+        this.setConfigObject(JSON.parse(previousConfig));
+      } catch {
+        if (settingsStore.settings) {
+          settingsStore.settings.mcp_servers = previousConfig;
+        }
+      }
+      if (window.toastFrontendError) {
+        window.toastFrontendError(error?.message || "Failed to update MCP tools", "MCP Server");
+      }
     }
   },
 
@@ -337,17 +386,23 @@ const model = {
   },
 
   async onToolCountClick(serverName) {
+    this.serverDetailError = "";
     const installed = this.findInstalledServer(serverName);
     const runtimeName = installed?.runtime_name || serverName;
     const resp = await API.callJsonApi("mcp_server_get_detail", { server_name: runtimeName });
-    if (resp.success) {
-      this.serverDetail = {
-        ...resp.detail,
-        runtime_name: runtimeName,
-        config_name: installed?.name || serverName,
-      };
-      openModal("settings/mcp/client/mcp-server-tools.html");
+    this.serverDetail = {
+      name: installed?.name || resp.detail?.name || serverName,
+      runtime_name: runtimeName,
+      config_name: installed?.name || serverName,
+      description: resp.detail?.description || installed?.description || "No description provided.",
+      disabled: Boolean(resp.detail?.disabled ?? installed?.disabled),
+      disabled_tools: Array.isArray(resp.detail?.disabled_tools) ? resp.detail.disabled_tools : (installed?.disabled_tools || []),
+      tools: Array.isArray(resp.detail?.tools) ? resp.detail.tools : [],
+    };
+    if (!resp.success) {
+      this.serverDetailError = resp.error || "Failed to load MCP tool details.";
     }
+    openModal("settings/mcp/client/mcp-server-tools.html");
   },
 
   scheduleRegistrySearch() {

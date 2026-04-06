@@ -12,17 +12,35 @@
     <div x-data>
         <template x-if="$store.mcpServersStore">
             <div>
-                <h3 x-text="$store.mcpServersStore.serverDetail.name"></h3>
-                <p x-text="$store.mcpServersStore.serverDetail.description"></p>
+                <div class="detail-header">
+                    <div>
+                        <h3 x-text="$store.mcpServersStore.serverDetail?.name || 'MCP Server Tools'"></h3>
+                        <p x-text="$store.mcpServersStore.serverDetail?.description || 'Inspect and control which tools remain available to agents.'"></p>
+                    </div>
+                    <div class="detail-summary"
+                        x-text="`${($store.mcpServersStore.serverDetail?.tools || []).filter(tool => !tool.disabled).length}/${($store.mcpServersStore.serverDetail?.tools || []).length} enabled`"></div>
+                </div>
+
+                <template x-if="$store.mcpServersStore.serverDetailError">
+                    <div class="error-banner" x-text="$store.mcpServersStore.serverDetailError"></div>
+                </template>
+
+                <template x-if="!$store.mcpServersStore.serverDetailError && ($store.mcpServersStore.serverDetail?.tools || []).length === 0">
+                    <div class="empty-state">No tools were returned for this MCP server.</div>
+                </template>
 
                 <div class="tools-container">
-                    <template x-for="tool in $store.mcpServersStore.serverDetail.tools" :key="tool.name">
+                    <template x-for="tool in ($store.mcpServersStore.serverDetail?.tools || [])" :key="tool.name">
                         <div class="tool-item">
                             <div class="tool-header">
-                                <h4 x-text="tool.name"></h4>
+                                <div>
+                                    <h4 x-text="tool.name"></h4>
+                                    <div class="tool-status" :class="tool.disabled ? 'is-disabled' : 'is-enabled'"
+                                        x-text="tool.disabled ? 'Disabled' : 'Enabled'"></div>
+                                </div>
                                 <select class="tool-toggle"
                                     :value="tool.disabled ? 'disabled' : 'enabled'"
-                                    @change="$store.mcpServersStore.setToolEnabled($store.mcpServersStore.serverDetail.name, tool.name, $event.target.value === 'enabled')">
+                                    @change="$store.mcpServersStore.setToolEnabled($store.mcpServersStore.serverDetail.runtime_name || $store.mcpServersStore.serverDetail.name, tool.name, $event.target.value === 'enabled')">
                                     <option value="enabled">ON</option>
                                     <option value="disabled">OFF</option>
                                 </select>
@@ -54,6 +72,40 @@
     </div>
 
     <style>
+        .detail-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+
+        .detail-summary {
+            padding: 0.35rem 0.65rem;
+            border-radius: 999px;
+            border: 1px solid rgba(192, 192, 192, 0.16);
+            color: var(--color-text-secondary);
+            white-space: nowrap;
+        }
+
+        .error-banner,
+        .empty-state {
+            margin-top: 1rem;
+            padding: 0.85rem 1rem;
+            border-radius: 8px;
+        }
+
+        .error-banner {
+            background: rgba(176, 43, 43, 0.12);
+            border: 1px solid rgba(176, 43, 43, 0.28);
+            color: #a53232;
+        }
+
+        .empty-state {
+            background: rgba(106, 118, 138, 0.08);
+            border: 1px solid rgba(106, 118, 138, 0.18);
+            color: var(--color-text-secondary);
+        }
+
         .tools-container {
             margin-top: 1.5em;
             display: flex;
@@ -71,6 +123,30 @@
             margin-top: 0;
             margin-bottom: 0.5em;
             font-size: 1.1em;
+        }
+
+        .tool-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 0.8rem;
+            color: var(--color-text-secondary);
+        }
+
+        .tool-status::before {
+            content: "";
+            width: 0.55rem;
+            height: 0.55rem;
+            border-radius: 999px;
+            background: #7c8c9f;
+        }
+
+        .tool-status.is-enabled::before {
+            background: #2b8a57;
+        }
+
+        .tool-status.is-disabled::before {
+            background: #b02b2b;
         }
 
         .tool-header {
@@ -132,6 +208,10 @@
         }
 
         @media (max-width: 640px) {
+            .detail-header {
+                flex-direction: column;
+            }
+
             .tool-header {
                 flex-direction: column;
                 align-items: stretch;
