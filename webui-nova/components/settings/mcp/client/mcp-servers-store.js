@@ -79,6 +79,9 @@ const model = {
   registryMeta: null,
   registryIncludeAllVersions: false,
   registrySearchTimer: null,
+  recentRegistryLoading: false,
+  recentRegistryError: "",
+  recentRegistryServers: [],
   registryDetailOpen: false,
   registryDetailLoading: false,
   registryDetailError: "",
@@ -97,7 +100,10 @@ const model = {
   async initialize() {
     this.refreshInstalledServers();
     this.startStatusCheck();
-    await this.loadRegistryServers();
+    await Promise.all([
+      this.loadRegistryServers(),
+      this.loadRecentRegistryServers(),
+    ]);
   },
 
   initializeEditor() {
@@ -118,6 +124,9 @@ const model = {
     if (tab === "json") {
       setTimeout(() => this.initializeEditor(), 0);
       return;
+    }
+    if (tab === "browse") {
+      this.loadRecentRegistryServers();
     }
     this.refreshInstalledServers();
   },
@@ -443,6 +452,29 @@ const model = {
     }
   },
 
+  async loadRecentRegistryServers() {
+    try {
+      this.recentRegistryLoading = true;
+      this.recentRegistryError = "";
+      const resp = await API.callJsonApi("mcp_registry", {
+        action: "search",
+        limit: 36,
+        version_mode: "latest",
+      });
+      if (!resp.ok) {
+        this.recentRegistryError = resp.error || "Failed to load recently updated MCP servers";
+        this.recentRegistryServers = [];
+        return;
+      }
+      this.recentRegistryServers = resp.data?.servers || [];
+    } catch (error) {
+      this.recentRegistryError = error?.message || "Failed to load recently updated MCP servers";
+      this.recentRegistryServers = [];
+    } finally {
+      this.recentRegistryLoading = false;
+    }
+  },
+
   installedRegistryServer(serverName) {
     return this.installedServers.find((server) => server.registry_name === serverName || server.name === configName(serverName)) || null;
   },
@@ -456,8 +488,12 @@ const model = {
   },
 
   registryCards() {
+    return this.buildRegistryCards(this.registryServers);
+  },
+
+  buildRegistryCards(servers = []) {
     const grouped = new Map();
-    for (const server of this.registryServers || []) {
+    for (const server of servers || []) {
       const key = server?.name || this.registryServerKey(server);
       if (!grouped.has(key)) {
         grouped.set(key, {
@@ -495,6 +531,49 @@ const model = {
         }),
       }))
       .sort((left, right) => String(left.title || left.name).localeCompare(String(right.title || right.name)));
+  },
+
+  recentRegistryCards() {
+    return [...this.buildRegistryCards(this.recentRegistryServers)]
+      .sort((left, right) => {
+        const leftUpdatedAt = Date.parse(left.versions?.[0]?.updatedAt || "") || 0;
+        const rightUpdatedAt = Date.parse(right.versions?.[0]?.updatedAt || "") || 0;
+        return rightUpdatedAt - leftUpdatedAt;
+      })
+      .slice(0, 8);
+  },
+
+  formatRelativeDate(value) {
+    if (!value) return "Unknown update date";
+    const timestamp = Date.parse(value);
+    if (Number.isNaN(timestamp)) return value;
+    const diffMs = Date.now() - timestamp;
+    const diffMinutes = Math.max(1, Math.round(diffMs / 60000));
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+    const diffHours = Math.round(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.round(diffHours / 24);
+    if (diffDays < 30) return `${diffDays}d ago`;
+    const diffMonths = Math.round(diffDays / 30);
+    if (diffMonths < 12) return `${diffMonths}mo ago`;
+    const diffYears = Math.round(diffMonths / 12);
+    return `${diffYears}y ago`;
+  },
+
+  installedRegistryUpdates(serverName, latestVersion) {
+    return this.installedServers
+      .filter((server) => server.registry_name === serverName && server.registry_version && server.registry_version !== latestVersion)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  },
+
+  hasInstalledUpdate(serverName, latestVersion) {
+    return this.installedRegistryUpdates(serverName, latestVersion).length > 0;
+  },
+
+  installedUpdateLabel(serverName, latestVersion) {
+    const count = this.installedRegistryUpdates(serverName, latestVersion).length;
+    if (count <= 1) return "Update installed";
+    return `Update ${count} installed`;
   },
 
   async openRegistryDetail(serverName, version = "latest") {
@@ -878,7 +957,7 @@ const model = {
     }
   },
 
-  async updateRegistryServer(serverName) {
+  async updateRegistryServer(serverName, { silent = false } = {}) {
     const installed = this.findInstalledServer(serverName);
     if (!installed?.registry_name) return;
 
@@ -894,7 +973,7 @@ const model = {
 
       const detail = detailResp.data || {};
       if ((detail.version || "") === (installed.registry_version || "")) {
-        if (window.toastFrontendInfo) {
+        if (!silent && window.toastFrontendInfo) {
           window.toastFrontendInfo(`${installed.name} is already on the latest version`, "MCP Registry");
         }
         return;
@@ -919,13 +998,35 @@ const model = {
 
       this.upsertServerConfig(installed.name, config);
       await this.applyNow();
-      if (window.toastFrontendSuccess) {
+      if (!silent && window.toastFrontendSuccess) {
         window.toastFrontendSuccess(`Updated ${installed.name} to ${detail.version}`, "MCP Registry");
       }
     } catch (error) {
       const message = error?.message || "Failed to update MCP server";
-      if (window.toastFrontendError) {
+      if (!silent && window.toastFrontendError) {
         window.toastFrontendError(message, "MCP Registry");
+      }
+      throw error;
+    }
+  },
+
+  async updateInstalledRegistryServers(serverName, latestVersion) {
+    const targets = this.installedRegistryUpdates(serverName, latestVersion);
+    if (!targets.length) return;
+
+    try {
+      for (const target of targets) {
+        await this.updateRegistryServer(target.name, { silent: true });
+      }
+      if (window.toastFrontendSuccess) {
+        const message = targets.length === 1
+          ? `Updated ${targets[0].name} to ${latestVersion}`
+          : `Updated ${targets.length} MCP servers to ${latestVersion}`;
+        window.toastFrontendSuccess(message, "MCP Registry");
+      }
+    } catch (error) {
+      if (window.toastFrontendError) {
+        window.toastFrontendError(error?.message || "Failed to update MCP server", "MCP Registry");
       }
     }
   },
