@@ -165,9 +165,9 @@ export function rebaseGithubReadmeHtml(html, githubUrl, branch) {
 export function renderSafeMarkdown(markdown, options = {}) {
   if (!markdown) return "";
 
-  const { githubUrl = "", branch = "", openExternalLinksInNewTab = true } = options;
+  const { githubUrl = "", branch = "", openExternalLinksInNewTab = true, breaks = true } = options;
 
-  let html = marked.parse(markdown, { breaks: true });
+  let html = marked.parse(markdown, { breaks });
   if (githubUrl && branch) {
     html = rebaseGithubReadmeHtml(html, githubUrl, branch);
   }

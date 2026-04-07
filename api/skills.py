@@ -1,4 +1,5 @@
 import base64
+import html
 import io
 import json
 import re
@@ -17,12 +18,28 @@ from helpers.skills_import import resolve_skills_destination_root
 
 REGISTRY_SEARCH_URL = "https://agentskill.sh/api/agent/search"
 REGISTRY_INSTALL_URL = "https://agentskill.sh/api/agent/skills/{slug}/install"
+REGISTRY_SKILL_URL = "https://agentskill.sh/@{owner}/{slug}"
+REGISTRY_OWNER_URL = "https://agentskill.sh/@{owner}"
 REGISTRY_META_FILE = ".agentskill.json"
 REGISTRY_HEADERS = {
     "User-Agent": "Nova/1.0 (+https://agentskill.sh integration)",
     "Accept": "application/json,text/plain,*/*",
     "Referer": "https://agentskill.sh/",
 }
+
+
+def public_registry_slug(slug: str) -> str:
+    value = str(slug or "").strip().lstrip("@")
+    if "/" in value:
+        return value.split("/")[-1]
+    return value
+
+
+def canonical_registry_owner(owner: str, slug: str) -> str:
+    slug_value = str(slug or "").strip().lstrip("@")
+    if "/" in slug_value:
+        return slug_value.split("/")[0]
+    return str(owner or "").strip().lstrip("@")
 
 
 class Skills(ApiHandler):
@@ -121,8 +138,9 @@ class Skills(ApiHandler):
         if isinstance(payload, dict):
             for key in ("results", "data", "items", "skills"):
                 if isinstance(payload.get(key), list):
+                    results = self._merge_registry_search_fallbacks(query, payload.get(key), limit)
                     return {
-                        "results": payload.get(key),
+                        "results": results,
                         "total": payload.get("total"),
                         "hasMore": bool(payload.get("hasMore")),
                         "totalExact": bool(payload.get("totalExact")),
@@ -133,9 +151,10 @@ class Skills(ApiHandler):
                         "query": query,
                     }
         if isinstance(payload, list):
+            results = self._merge_registry_search_fallbacks(query, payload, limit)
             return {
-                "results": payload,
-                "total": len(payload),
+                "results": results,
+                "total": len(results),
                 "hasMore": False,
                 "totalExact": True,
                 "platformFallback": False,
@@ -156,22 +175,244 @@ class Skills(ApiHandler):
             "query": query,
         }
 
+    def _merge_registry_search_fallbacks(self, query: str, results: list, limit: int) -> list:
+        items = self._normalize_registry_search_results(results)
+        if not query:
+            return items
+
+        merged = self._prepend_exact_registry_match(query, items)
+        merged = self._prepend_owner_registry_matches(query, merged, limit)
+        return self._rank_registry_search_results(query, merged)
+
+    def _normalize_registry_search_results(self, results: list) -> list:
+        normalized = []
+        for item in results or []:
+            if not isinstance(item, dict):
+                continue
+            canonical_owner = canonical_registry_owner(str(item.get("owner") or ""), str(item.get("slug") or item.get("name") or ""))
+            normalized.append({
+                **item,
+                "owner": canonical_owner or item.get("owner"),
+                "ownerLabel": item.get("owner") or canonical_owner,
+            })
+        return normalized
+
+    def _prepend_exact_registry_match(self, query: str, results: list) -> list:
+        parsed = self._parse_registry_query(query)
+        owner = parsed.get("owner")
+        slug = parsed.get("slug")
+        if not owner or not slug:
+            return results
+
+        registry_slug = self._registry_slug(owner, slug)
+        if any(str(item.get("slug") or "").strip().lstrip("@").lower() == registry_slug.lower() for item in results if isinstance(item, dict)):
+            return results
+
+        try:
+            payload = self._fetch_registry_install_payload(owner, slug)
+        except Exception:
+            return results
+
+        return [self._search_result_from_payload(payload, owner, slug), *results]
+
+    def _prepend_owner_registry_matches(self, query: str, results: list, limit: int) -> list:
+        parsed = self._parse_registry_query(query)
+        owner = parsed.get("owner")
+        slug = parsed.get("slug")
+        owner_only_query = not slug and owner and re.fullmatch(r"@?[A-Za-z0-9._-]+", query.strip())
+        if not owner_only_query:
+            return results
+
+        current = list(results)
+        seen = {
+            str(item.get("slug") or "").strip().lstrip("@").lower()
+            for item in current
+            if isinstance(item, dict)
+        }
+
+        fallback_items = []
+        for owner_slug in self._fetch_owner_skill_slugs(owner, limit=limit):
+            registry_slug = self._registry_slug(owner, owner_slug)
+            if registry_slug.lower() in seen:
+                continue
+            try:
+                payload = self._fetch_registry_install_payload(owner, owner_slug)
+            except Exception:
+                continue
+            fallback_items.append(self._search_result_from_payload(payload, owner, owner_slug))
+            seen.add(registry_slug.lower())
+
+        return [*fallback_items, *current]
+
+    def _rank_registry_search_results(self, query: str, results: list) -> list:
+        normalized_query = self._normalize_registry_search_text(query)
+        normalized_slug_query = normalized_query.replace(" ", "-")
+        parsed = self._parse_registry_query(query)
+        target_owner = self._normalize_registry_search_text(parsed.get("owner") or "")
+        target_slug = self._normalize_registry_search_text(parsed.get("slug") or "")
+
+        def sort_key(item: dict):
+            owner = self._normalize_registry_search_text(item.get("owner") or "")
+            name = self._normalize_registry_search_text(item.get("name") or "")
+            slug_value = self._normalize_registry_search_text(public_registry_slug(item.get("slug") or item.get("name") or ""))
+            full_slug = self._normalize_registry_search_text(str(item.get("slug") or ""))
+
+            score = 0
+            if normalized_query and full_slug == normalized_query:
+                score += 100
+            if normalized_query and slug_value == normalized_query:
+                score += 90
+            if normalized_slug_query and slug_value.replace(" ", "-") == normalized_slug_query:
+                score += 80
+            if normalized_query and name == normalized_query:
+                score += 70
+            if target_owner and owner == target_owner:
+                score += 40
+            if target_slug and slug_value == target_slug:
+                score += 40
+            if normalized_query and normalized_query in slug_value:
+                score += 20
+            if normalized_query and normalized_query in name:
+                score += 10
+
+            return (
+                -score,
+                -(int(item.get("githubStars") or 0)),
+                str(item.get("name") or item.get("slug") or "").lower(),
+            )
+
+        deduped = []
+        seen = set()
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            slug = str(item.get("slug") or "").strip().lstrip("@").lower()
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            deduped.append(item)
+
+        deduped.sort(key=sort_key)
+        return deduped
+
+    def _parse_registry_query(self, query: str) -> dict:
+        value = str(query or "").strip()
+        if not value:
+            return {}
+
+        url_match = re.search(r"agentskill\.sh/@([^/\s?#]+)/([^\s?#/]+)", value, flags=re.IGNORECASE)
+        if url_match:
+            return {
+                "owner": url_match.group(1),
+                "slug": url_match.group(2),
+            }
+
+        pair_match = re.fullmatch(r"@?([^/\s]+)/([^\s/]+)", value)
+        if pair_match:
+            return {
+                "owner": pair_match.group(1),
+                "slug": pair_match.group(2),
+            }
+
+        owner_match = re.fullmatch(r"@?([A-Za-z0-9._-]+)", value)
+        if owner_match:
+            return {"owner": owner_match.group(1)}
+
+        return {}
+
+    def _normalize_registry_search_text(self, value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+    def _fetch_owner_skill_slugs(self, owner: str, *, limit: int = 24) -> list[str]:
+        url = REGISTRY_OWNER_URL.format(owner=quote(str(owner or "").strip().lstrip("@"), safe=""))
+        try:
+            response = requests.get(url, headers=REGISTRY_HEADERS, timeout=20)
+            response.raise_for_status()
+        except requests.RequestException:
+            return []
+
+        pattern = re.compile(rf"/@{re.escape(str(owner).lstrip('@'))}/([^\"'?#/]+)", flags=re.IGNORECASE)
+        seen = []
+        for match in pattern.finditer(response.text):
+            slug = match.group(1).strip()
+            if not slug or slug in {"quality", "security"} or slug in seen:
+                continue
+            seen.append(slug)
+            if len(seen) >= limit:
+                break
+        return seen
+
+    def _search_result_from_payload(self, payload: dict, owner: str, slug: str) -> dict:
+        canonical_owner = canonical_registry_owner(owner, payload.get("slug") or slug)
+        registry_slug = self._registry_slug(canonical_owner, slug)
+        return {
+            "slug": payload.get("slug") or registry_slug,
+            "name": payload.get("name") or public_registry_slug(slug),
+            "owner": canonical_owner,
+            "ownerLabel": payload.get("owner") or canonical_owner,
+            "description": payload.get("description") or "",
+            "category": payload.get("category"),
+            "jobCategories": payload.get("jobCategories") or [],
+            "platforms": payload.get("platforms") or [],
+            "skillTypes": payload.get("skillTypes") or [],
+            "installCount": payload.get("installCount") or 0,
+            "githubStars": payload.get("githubStars") or 0,
+            "score": payload.get("score") or 0,
+            "ratingCount": payload.get("ratingCount") or 0,
+            "securityScore": payload.get("securityScore") or 0,
+            "contentQualityScore": payload.get("contentQualityScore") or 0,
+            "contentSha": payload.get("contentSha"),
+            "updatedAt": payload.get("updatedAt"),
+        }
+
     def registry_detail(self, input: Input):
         owner = str(input.get("owner") or "").strip()
         slug = str(input.get("slug") or "").strip()
         if not owner or not slug:
             raise Exception("owner and slug are required")
 
-        payload = self._fetch_registry_install_payload(owner, slug)
+        canonical_owner = canonical_registry_owner(owner, slug)
+        registry_slug = self._registry_slug(canonical_owner, slug)
+        public_slug = public_registry_slug(slug)
+        payload = self._fetch_registry_install_payload(canonical_owner, slug)
+        source_url = REGISTRY_SKILL_URL.format(owner=quote(canonical_owner, safe=""), slug=quote(public_slug, safe=""))
+        quality_url = f"{source_url}/quality"
+        security_url = f"{source_url}/security"
         return {
-            "slug": payload.get("slug") or self._registry_slug(owner, slug),
-            "name": payload.get("name") or slug,
-            "owner": payload.get("owner") or owner,
+            "slug": public_slug,
+            "name": payload.get("name") or public_slug,
+            "owner": canonical_owner,
+            "ownerLabel": payload.get("owner") or canonical_owner,
             "description": payload.get("description") or "",
             "skillMd": payload.get("skillMd") or payload.get("content") or "",
             "contentSha": payload.get("contentSha"),
             "updatedAt": payload.get("updatedAt"),
-            "source": f"https://agentskill.sh/{owner}/{slug}",
+            "source": source_url,
+            "registryInstallApi": REGISTRY_INSTALL_URL.format(slug=quote(registry_slug, safe="")),
+            "qualityDetails": self._fetch_quality_details(quality_url),
+            "securityDetails": self._fetch_security_details(security_url),
+            "sourceReferences": [
+                {
+                    "label": "Marketplace Page",
+                    "url": source_url,
+                    "kind": "page",
+                },
+                {
+                    "label": "Quality Report",
+                    "url": quality_url,
+                    "kind": "quality",
+                },
+                {
+                    "label": "Security Report",
+                    "url": security_url,
+                    "kind": "security",
+                },
+                {
+                    "label": "Registry Install API",
+                    "url": REGISTRY_INSTALL_URL.format(slug=quote(registry_slug, safe="")),
+                    "kind": "api",
+                },
+            ],
         }
 
     def registry_download(self, input: Input):
@@ -180,20 +421,22 @@ class Skills(ApiHandler):
         if not owner or not slug:
             raise Exception("owner and slug are required")
 
-        payload = self._fetch_registry_install_payload(owner, slug)
+        canonical_owner = canonical_registry_owner(owner, slug)
+        payload = self._fetch_registry_install_payload(canonical_owner, slug)
         content = payload.get("skillMd") if isinstance(payload, dict) else None
         if not isinstance(content, str) or not content.strip():
             content = payload.get("content") if isinstance(payload, dict) else None
         if not isinstance(content, str) or not content.strip():
             raise Exception("Registry did not return SKILL.md content")
 
-        archive_name = f"{owner}-{slug}.zip"
+        public_slug_name = public_registry_slug(slug)
+        archive_name = f"{canonical_owner}-{public_slug_name}.zip"
         zip_buffer = io.BytesIO()
-        registry_slug = self._registry_slug(owner, slug)
-        zip_root = f"{slug}/"
+        registry_slug = self._registry_slug(canonical_owner, slug)
+        zip_root = f"{public_slug_name}/"
         meta = {
-            "owner": owner,
-            "slug": slug,
+            "owner": canonical_owner,
+            "slug": public_slug_name,
             "registry_slug": registry_slug,
             "contentSha": payload.get("contentSha"),
             "updatedAt": payload.get("updatedAt"),
@@ -203,12 +446,14 @@ class Skills(ApiHandler):
 
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(f"{zip_root}SKILL.md", content)
+            for relative_path, file_content in self._registry_skill_files(payload):
+                archive.writestr(f"{zip_root}{relative_path}", file_content)
             archive.writestr(f"{zip_root}{REGISTRY_META_FILE}", json.dumps(meta, indent=2))
 
         return {
             "filename": archive_name,
             "content_b64": base64.b64encode(zip_buffer.getvalue()).decode("ascii"),
-            "owner": owner,
+            "owner": canonical_owner,
             "slug": slug,
         }
 
@@ -223,8 +468,10 @@ class Skills(ApiHandler):
         if not owner or not slug:
             raise Exception("owner and slug are required")
 
-        registry_slug = self._registry_slug(owner, slug)
-        payload = self._fetch_registry_install_payload(owner, slug)
+        canonical_owner = canonical_registry_owner(owner, slug)
+        registry_slug = self._registry_slug(canonical_owner, slug)
+        public_slug_name = public_registry_slug(slug)
+        payload = self._fetch_registry_install_payload(canonical_owner, slug)
         content = payload.get("skillMd") if isinstance(payload, dict) else None
         if not isinstance(content, str) or not content.strip():
             content = payload.get("content") if isinstance(payload, dict) else None
@@ -232,7 +479,7 @@ class Skills(ApiHandler):
             raise Exception("Registry did not return SKILL.md content")
 
         skill_dir = self._resolve_registry_install_dir(
-            slug=slug,
+            slug=public_slug_name,
             project_name=project_name,
             agent_profile=agent_profile,
             namespace=namespace,
@@ -243,15 +490,15 @@ class Skills(ApiHandler):
         self._write_registry_skill(
             skill_dir=skill_dir,
             content=content,
-            owner=owner,
-            slug=slug,
+            owner=canonical_owner,
+            slug=public_slug_name,
             registry_slug=registry_slug,
             payload=payload if isinstance(payload, dict) else {},
         )
 
         return {
             "ok": True,
-            "name": slug,
+            "name": public_slug_name,
             "path": str(skill_dir),
             "project_name": project_name,
             "agent_profile": agent_profile,
@@ -273,8 +520,9 @@ class Skills(ApiHandler):
         if not owner or not slug:
             raise Exception("Registry metadata is incomplete")
 
-        registry_slug = self._registry_slug(owner, slug)
-        payload = self._fetch_registry_install_payload(owner, slug)
+        canonical_owner = canonical_registry_owner(owner, slug)
+        registry_slug = self._registry_slug(canonical_owner, slug)
+        payload = self._fetch_registry_install_payload(canonical_owner, slug)
         content = payload.get("skillMd") if isinstance(payload, dict) else None
         if not isinstance(content, str) or not content.strip():
             content = payload.get("content") if isinstance(payload, dict) else None
@@ -285,7 +533,7 @@ class Skills(ApiHandler):
         self._write_registry_skill(
             skill_dir=skill_dir,
             content=content,
-            owner=owner,
+            owner=canonical_owner,
             slug=slug,
             registry_slug=registry_slug,
             payload=payload if isinstance(payload, dict) else {},
@@ -308,7 +556,7 @@ class Skills(ApiHandler):
             raise Exception("Registry returned invalid JSON") from e
 
     def _fetch_registry_install_payload(self, owner: str, slug: str) -> dict:
-        registry_slug = self._registry_slug(owner, slug)
+        registry_slug = self._registry_slug(canonical_registry_owner(owner, slug), slug)
         payload = self._fetch_json(
             REGISTRY_INSTALL_URL.format(slug=quote(registry_slug, safe=""))
         )
@@ -320,6 +568,81 @@ class Skills(ApiHandler):
         if "/" in slug:
             return slug.lstrip("@")
         return f"{owner}/{slug}".lstrip("@")
+
+    def _fetch_registry_page_lines(self, url: str) -> list[str]:
+        try:
+            response = requests.get(url, headers=REGISTRY_HEADERS, timeout=20)
+            response.raise_for_status()
+        except requests.RequestException:
+            return []
+
+        content = response.text
+        content = re.sub(r"<script\b[^>]*>.*?</script>", " ", content, flags=re.IGNORECASE | re.DOTALL)
+        content = re.sub(r"<style\b[^>]*>.*?</style>", " ", content, flags=re.IGNORECASE | re.DOTALL)
+        content = re.sub(r"<!--.*?-->", " ", content, flags=re.DOTALL)
+        content = re.sub(r"<[^>]+>", "\n", content)
+        content = html.unescape(content)
+        lines = []
+        for line in content.splitlines():
+            normalized = re.sub(r"\s+", " ", line).strip()
+            if normalized:
+                lines.append(normalized)
+        return lines
+
+    def _index_of_line(self, lines: list[str], marker: str) -> int:
+        marker_lower = marker.lower()
+        for index, line in enumerate(lines):
+            if line.lower() == marker_lower:
+                return index
+        return -1
+
+    def _collect_lines_between(self, lines: list[str], start_marker: str, end_markers: list[str], *, limit: int | None = None) -> list[str]:
+        start_index = self._index_of_line(lines, start_marker)
+        if start_index < 0:
+            return []
+
+        end_indexes = [self._index_of_line(lines, marker) for marker in end_markers]
+        end_indexes = [index for index in end_indexes if index > start_index]
+        end_index = min(end_indexes) if end_indexes else len(lines)
+        collected = lines[start_index + 1:end_index]
+        if limit is not None:
+            collected = collected[:limit]
+        return collected
+
+    def _line_before_marker(self, lines: list[str], marker: str, pattern: str) -> str:
+        marker_index = self._index_of_line(lines, marker)
+        if marker_index <= 0:
+            return ""
+        regex = re.compile(pattern)
+        for line in reversed(lines[:marker_index]):
+            if regex.search(line):
+                return line
+        return ""
+
+    def _fetch_quality_details(self, url: str) -> dict:
+        lines = self._fetch_registry_page_lines(url)
+        if not lines:
+            return {"url": url}
+        return {
+            "url": url,
+            "scoreLine": self._line_before_marker(lines, "Quality score", r"\b\d{1,3}/100\b"),
+            "summary": self._collect_lines_between(lines, "Quality score", ["Score Breakdown", "Structural Checks"], limit=4),
+            "breakdown": self._collect_lines_between(lines, "Score Breakdown", ["Structural Checks", "Design Pattern"], limit=12),
+            "checks": self._collect_lines_between(lines, "Structural Checks", ["Design Pattern", "Additional Links"], limit=16),
+            "designPattern": self._collect_lines_between(lines, "Design Pattern", ["Install /learn to browse and install skills", "Additional Links"], limit=8),
+        }
+
+    def _fetch_security_details(self, url: str) -> dict:
+        lines = self._fetch_registry_page_lines(url)
+        if not lines:
+            return {"url": url}
+        return {
+            "url": url,
+            "scoreLine": self._line_before_marker(lines, "Security score", r"\b\d{1,3}/100\b"),
+            "summary": self._collect_lines_between(lines, "Security score", ["Categories Tested", "Security Issues"], limit=4),
+            "categories": self._collect_lines_between(lines, "Categories Tested", ["Security Issues", "Install /learn to browse and install skills", "Additional Links"], limit=16),
+            "issues": self._collect_lines_between(lines, "Security Issues", ["Install /learn to browse and install skills", "Additional Links"], limit=8),
+        }
 
     def _sanitize_namespace(self, namespace: object) -> str | None:
         value = str(namespace or "").strip()
@@ -396,6 +719,10 @@ class Skills(ApiHandler):
         skill_dir.mkdir(parents=True, exist_ok=True)
         skill_md = skill_dir / "SKILL.md"
         skill_md.write_text(content, encoding="utf-8")
+        for relative_path, file_content in self._registry_skill_files(payload):
+            destination = self._safe_skill_file_path(skill_dir, relative_path)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(file_content, encoding="utf-8")
         self._write_registry_meta(
             skill_dir,
             {
@@ -407,6 +734,30 @@ class Skills(ApiHandler):
                 "source": "agentskill.sh",
             },
         )
+
+    def _registry_skill_files(self, payload: dict) -> list[tuple[str, str]]:
+        files_to_write: list[tuple[str, str]] = []
+        for item in payload.get("skillFiles") or []:
+            if not isinstance(item, dict):
+                continue
+            relative_path = str(item.get("path") or "").strip().replace("\\", "/")
+            content = item.get("content")
+            if not relative_path or not isinstance(content, str):
+                continue
+            normalized_path = relative_path.lstrip("/")
+            if not normalized_path or normalized_path.endswith("/"):
+                continue
+            files_to_write.append((normalized_path, content))
+        return files_to_write
+
+    def _safe_skill_file_path(self, skill_dir: Path, relative_path: str) -> Path:
+        candidate = (skill_dir / relative_path).resolve()
+        skill_root = skill_dir.resolve()
+        try:
+            candidate.relative_to(skill_root)
+        except ValueError as exc:
+            raise Exception(f"Registry returned invalid skill file path: {relative_path}") from exc
+        return candidate
 
     def _registry_error_message(self, response: requests.Response | None) -> str:
         if response is None:

@@ -35,6 +35,12 @@
                         </label>
 
                         <div class="skills-toolbar-actions">
+                            <button type="button" class="button"
+                                @click="$store.skillsStore.updateAllInstalledSkills()"
+                                :disabled="$store.skillsStore.loading || !$store.skillsStore.installedRegistrySkillCount || $store.skillsStore.busyKey.startsWith('update:')">
+                                <span class="icon material-symbols-outlined">system_update_alt</span>
+                                <span x-text="$store.skillsStore.busyKey.startsWith('update:') ? 'Updating...' : `Update Installed (${$store.skillsStore.installedRegistrySkillCount})`"></span>
+                            </button>
                             <button type="button" class="button confirm" @click="$store.skillsStore.loadSkills()" :disabled="$store.skillsStore.loading">
                                 <span class="icon material-symbols-outlined">refresh</span> Refresh
                             </button>

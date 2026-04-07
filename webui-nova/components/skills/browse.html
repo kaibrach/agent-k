@@ -17,7 +17,10 @@
                             Browse skills from agentskill.sh, inspect quality and update status, and install them directly into your global, project, or agent-profile scopes.
                         </p>
                     </div>
-                    <div class="pi-browse-summary" x-text="$store.skillsStore.browseResultsSummary"></div>
+                    <div class="pi-browse-summary">
+                        <div x-text="$store.skillsStore.browseResultsSummary"></div>
+                        <div class="pi-browse-summary-sub" x-show="$store.skillsStore.registryHasMore" x-text="`${$store.skillsStore.registrySkills.length} loaded${$store.skillsStore.registryTotalExact ? '' : '+'}`"></div>
+                    </div>
                 </section>
 
                 <div class="pi-index-toolbar">
@@ -34,6 +37,7 @@
                         <span class="pi-field-label">Sort</span>
                         <select class="pi-sort-select" x-model="$store.skillsStore.sortBy">
                             <option value="stars">Stars</option>
+                            <option value="rating">Rating</option>
                             <option value="name">Name</option>
                         </select>
                     </label>
@@ -72,7 +76,7 @@
                     </template>
                 </div>
 
-                <div x-show="$store.skillsStore.registryLoading" class="pi-state-card pi-state-loading">
+                <div x-show="$store.skillsStore.registryLoading && !$store.skillsStore.registrySkills.length" class="pi-state-card pi-state-loading">
                     <span class="material-symbols-outlined">progress_activity</span>
                     <div>
                         <div class="pi-state-title">Loading Skills Marketplace</div>
@@ -88,7 +92,7 @@
                     </div>
                 </div>
 
-                <div x-show="!$store.skillsStore.registryLoading && !$store.skillsStore.registryError && $store.skillsStore.filteredSkills.length > 0" class="pi-grid">
+                <div x-show="!$store.skillsStore.registryError && $store.skillsStore.filteredSkills.length > 0" class="pi-grid">
                     <template x-for="skill in $store.skillsStore.paginatedSkills" :key="skill.key">
                         <button type="button" class="pi-card" @click="$store.skillsStore.openDetail(skill)">
                             <div class="pi-card-header">
@@ -158,19 +162,22 @@
                     </div>
                 </div>
 
-                <div x-show="$store.skillsStore.totalPages > 1" class="pi-pagination">
-                    <button class="button"
-                        :disabled="$store.skillsStore.page <= 1"
-                        @click="$store.skillsStore.setPage($store.skillsStore.page - 1)">
-                        <span class="material-symbols-outlined">chevron_left</span>
-                    </button>
-                    <span class="pi-page-info" x-text="'Page ' + $store.skillsStore.page + ' of ' + $store.skillsStore.totalPages"></span>
-                    <button class="button"
-                        :disabled="$store.skillsStore.page >= $store.skillsStore.totalPages"
-                        @click="$store.skillsStore.setPage($store.skillsStore.page + 1)">
-                        <span class="material-symbols-outlined">chevron_right</span>
-                    </button>
+                <div x-show="!$store.skillsStore.registryError && $store.skillsStore.registrySkills.length > 0" class="pi-load-more-wrap">
+                    <div class="pi-load-more-text" x-show="$store.skillsStore.canLoadMoreRegistrySkills">
+                        Scroll to load more skills.
+                    </div>
+                    <div class="pi-load-more-text" x-show="$store.skillsStore.registryLoading && $store.skillsStore.registrySkills.length > 0">
+                        Loading more skills...
+                    </div>
+                    <div class="pi-load-more-text" x-show="!$store.skillsStore.canLoadMoreRegistrySkills && !$store.skillsStore.search.trim() && !$store.skillsStore.registryHasMore && !$store.skillsStore.registryLoading">
+                        All currently discoverable registry skills are loaded.
+                    </div>
+                    <div class="pi-load-more-text" x-show="$store.skillsStore.search.trim()">
+                        Search results are limited by the public registry feed.
+                    </div>
+                    <div class="pi-scroll-sentinel" x-init="$store.skillsStore.registerBrowseSentinel($el)"></div>
                 </div>
+
             </div>
         </template>
     </div>
@@ -234,6 +241,13 @@
             font-size: 0.85rem;
             font-weight: 600;
             color: var(--color-text-primary);
+        }
+
+        .pi-browse-summary-sub {
+            margin-top: 0.18rem;
+            font-size: 0.74rem;
+            font-weight: 500;
+            color: var(--color-text-muted);
         }
 
         .pi-index-toolbar {
@@ -620,17 +634,22 @@
             border-color: rgba(245, 158, 11, 0.35);
         }
 
-        .pi-pagination {
+        .pi-load-more-wrap {
             display: flex;
+            flex-direction: column;
             align-items: center;
-            justify-content: center;
-            gap: 0.75rem;
-            padding: 0.4rem 0 0.1rem;
+            gap: 0.65rem;
+            padding-top: 0.25rem;
         }
 
-        .pi-page-info {
-            font-size: 0.9rem;
-            color: var(--color-text-secondary);
+        .pi-load-more-text {
+            font-size: 0.84rem;
+            color: var(--color-text-muted);
+        }
+
+        .pi-scroll-sentinel {
+            width: 100%;
+            height: 1px;
         }
 
         @media (max-width: 720px) {

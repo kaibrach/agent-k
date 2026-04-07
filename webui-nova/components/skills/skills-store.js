@@ -6,9 +6,57 @@ import { store as fileBrowserStore } from "/components/modals/file-browser/file-
 
 const fetchApi = globalThis.fetchApi;
 
-const REGISTRY_FETCH_LIMIT = 120;
+const REGISTRY_FETCH_LIMIT = 24;
 const PER_PAGE = 24;
 const POPULAR_SKILL_MIN_STARS = 5;
+const REGISTRY_SECTIONS = ["trending", "top", "hot"];
+const REGISTRY_DISCOVERY_QUERIES = ["api", "frontend", "backend", "testing", "devops", "react", "excel", "git", "design", "data"];
+
+function stripMarkdownFrontmatter(markdown) {
+  let value = String(markdown || "").replace(/^\uFEFF/, "").trimStart();
+
+  value = value.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
+  value = value.replace(/^#\s*---\s*agentskill\.sh\s*---\r?\n(?:#.*\r?\n)+?#\s*---\s*\r?\n?/i, "");
+
+  return value.trim();
+}
+
+function normalizeRegistryIdentity(rawOwner, rawSlug, rawName) {
+  const slugValue = String(rawSlug || rawName || "skill").trim().replace(/^@/, "");
+  if (slugValue.includes("/")) {
+    const [parsedOwner, ...rest] = slugValue.split("/");
+    const normalizedSlug = rest.join("/") || rawName || "skill";
+    return {
+      owner: String(parsedOwner || rawOwner || "unknown").trim(),
+      ownerLabel: String(rawOwner || parsedOwner || "unknown").trim(),
+      slug: normalizedSlug,
+      registrySlug: `${String(parsedOwner || rawOwner || "unknown").trim()}/${normalizedSlug}`,
+    };
+  }
+
+  const owner = String(rawOwner || "unknown").trim();
+  return {
+    owner,
+    ownerLabel: owner,
+    slug: slugValue,
+    registrySlug: `${owner}/${slugValue}`,
+  };
+}
+
+function dedupeRegistrySkills(skills) {
+  const seen = new Map();
+  for (const skill of skills || []) {
+    const identity = normalizeRegistryIdentity(skill?.owner, skill?.slug, skill?.name);
+    seen.set(identity.registrySlug, {
+      ...skill,
+      owner: identity.owner,
+      ownerLabel: identity.ownerLabel,
+      slug: identity.slug,
+      registrySlug: identity.registrySlug,
+    });
+  }
+  return [...seen.values()];
+}
 
 function sanitizeNamespace(text) {
   if (!text) return "";
@@ -70,6 +118,13 @@ const model = {
   registryError: "",
   registrySection: "trending",
   registrySkills: [],
+  registryPage: 1,
+  registryHasMore: false,
+  registryTotal: 0,
+  registryTotalExact: false,
+  registryLoadedSections: [],
+  registryFeedIndex: 0,
+  registryAppending: false,
   search: "",
   searchTimer: null,
   sortBy: "stars",
@@ -91,6 +146,8 @@ const model = {
   detailLoading: false,
   detailError: "",
   detailHtml: "",
+  detailModalPath: "components/skills/detail.html",
+  browseObserver: null,
 
   async init(mode = "browse") {
     this.resetViewState();
@@ -112,6 +169,13 @@ const model = {
     this.registryError = "";
     this.registrySection = "trending";
     this.registrySkills = [];
+    this.registryPage = 1;
+    this.registryHasMore = false;
+    this.registryTotal = 0;
+    this.registryTotalExact = false;
+    this.registryLoadedSections = [];
+    this.registryFeedIndex = 0;
+    this.registryAppending = false;
     this.search = "";
     this.sortBy = "stars";
     this.browseFilter = "all";
@@ -132,6 +196,10 @@ const model = {
     this.detailLoading = false;
     this.detailError = "";
     this.detailHtml = "";
+    if (this.browseObserver) {
+      this.browseObserver.disconnect();
+      this.browseObserver = null;
+    }
   },
 
   onClose() {
@@ -197,50 +265,112 @@ const model = {
     }
   },
 
-  async loadRegistrySkills() {
+  async loadRegistrySkills({ append = false } = {}) {
     try {
       this.registryLoading = true;
+      this.registryAppending = append;
       this.registryError = "";
-      this.loadingMessage = "Loading skills...";
+      this.loadingMessage = append ? "Loading more skills..." : "Loading skills...";
       const query = this.search.trim();
-      const response = await fetchApi("/skills", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "registry_search",
-          query,
-          section: query ? null : this.registrySection,
-          limit: REGISTRY_FETCH_LIMIT,
-        }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!result.ok) {
-        throw new Error(result.error || "Failed to load marketplace skills");
+      let mergedSkills = append ? [...(this.registrySkills || [])] : [];
+      if (query) {
+        const items = await this.fetchRegistrySource({ type: "query", value: query });
+        this.registrySkills = dedupeRegistrySkills(items);
+        this.registryLoadedSections = [];
+        this.registryFeedIndex = 0;
+        this.registryHasMore = false;
+        this.registryTotal = this.registrySkills.length;
+        this.registryTotalExact = true;
+      } else {
+        const sources = this.registryBrowseSources();
+        const nextIndex = append ? this.registryFeedIndex : 0;
+        const nextSource = sources[nextIndex];
+        if (!nextSource) {
+          this.registryHasMore = false;
+          this.loadingMessage = "";
+          return;
+        }
+        const items = await this.fetchRegistrySource(nextSource);
+        mergedSkills = dedupeRegistrySkills([...mergedSkills, ...items]);
+        this.registrySkills = mergedSkills;
+        this.registryLoadedSections = append
+          ? [...this.registryLoadedSections, nextSource.label]
+          : [nextSource.label];
+        this.registryFeedIndex = nextIndex + 1;
+        this.registryHasMore = this.registryFeedIndex < sources.length;
+        this.registryTotal = this.registrySkills.length;
+        this.registryTotalExact = false;
       }
-      const payload = result.data || {};
-      const items = Array.isArray(payload.results) ? payload.results : (Array.isArray(payload) ? payload : []);
-      this.registrySkills = items;
       this.page = 1;
       this.loadingMessage = "";
       this.refreshSelectedSkillState();
     } catch (error) {
       this.registryError = error?.message || "Failed to load marketplace skills";
       this.registrySkills = [];
+      this.registryHasMore = false;
+      this.registryTotal = 0;
+      this.registryTotalExact = false;
+      this.registryLoadedSections = [];
+      this.registryFeedIndex = 0;
       this.loadingMessage = "";
     } finally {
       this.registryLoading = false;
+      this.registryAppending = false;
     }
   },
 
   reloadIndex() {
+    this.registryPage = 1;
     this.page = 1;
     return this.loadRegistrySkills();
+  },
+
+  async loadMoreRegistrySkills() {
+    if (this.registryLoading || !this.registryHasMore) return;
+    await this.loadRegistrySkills({ append: true });
+  },
+
+  registryBrowseSources() {
+    const sectionSources = [
+      this.registrySection,
+      ...REGISTRY_SECTIONS.filter((section) => section !== this.registrySection),
+    ].map((section) => ({ type: "section", value: section, label: section }));
+
+    const discoverySources = REGISTRY_DISCOVERY_QUERIES.map((term) => ({
+      type: "query",
+      value: term,
+      label: term,
+    }));
+
+    return [...sectionSources, ...discoverySources];
+  },
+
+  async fetchRegistrySource(source) {
+    const response = await fetchApi("/skills", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "registry_search",
+        query: source?.type === "query" ? source.value : "",
+        section: source?.type === "section" ? source.value : null,
+        limit: REGISTRY_FETCH_LIMIT,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!result.ok) {
+      throw new Error(result.error || "Failed to load marketplace skills");
+    }
+    const payload = result.data || {};
+    return Array.isArray(payload.results) ? payload.results : (Array.isArray(payload) ? payload : []);
   },
 
   scheduleSearch() {
     if (this.searchTimer) clearTimeout(this.searchTimer);
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
+      this.registryPage = 1;
+      this.registryFeedIndex = 0;
+      this.registryLoadedSections = [];
       this.page = 1;
       this.loadRegistrySkills();
     }, this.search.trim() ? 250 : 0);
@@ -248,6 +378,9 @@ const model = {
 
   setRegistrySection(section) {
     this.registrySection = section || "trending";
+    this.registryPage = 1;
+    this.registryFeedIndex = 0;
+    this.registryLoadedSections = [];
     this.page = 1;
     this.browseFilter = "all";
     this.loadRegistrySkills();
@@ -262,10 +395,23 @@ const model = {
     this.page = Math.max(1, Math.min(page, this.totalPages));
   },
 
+  registerBrowseSentinel(element) {
+    if (!element || this.browseObserver) return;
+    this.browseObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && this.canLoadMoreRegistrySkills) {
+          this.loadMoreRegistrySkills();
+        }
+      }
+    }, { rootMargin: "320px 0px" });
+    this.browseObserver.observe(element);
+  },
+
   normalizedRegistrySkills() {
     return (this.registrySkills || []).map((skill) => {
-      const owner = skill?.owner || "unknown";
-      const slug = skill?.slug || skill?.name || "skill";
+      const identity = normalizeRegistryIdentity(skill?.owner, skill?.slug, skill?.name);
+      const owner = identity.owner;
+      const slug = identity.slug;
       const tags = normalizeTags(skill);
       const installedSkill = this.installedRegistrySkill({ owner, slug });
       const installed = Boolean(installedSkill);
@@ -273,8 +419,10 @@ const model = {
       return {
         ...skill,
         owner,
+        ownerLabel: skill?.ownerLabel || identity.ownerLabel || owner,
         slug,
-        key: `${owner}/${slug}`,
+        registrySlug: identity.registrySlug,
+        key: identity.registrySlug,
         title: skill?.name || slug,
         subtitle: owner,
         tags,
@@ -290,8 +438,9 @@ const model = {
   installedRegistryMap() {
     const map = new Map();
     for (const skill of this.skills || []) {
-      const owner = skill?.registry?.owner;
-      const slug = skill?.registry?.slug;
+      const identity = normalizeRegistryIdentity(skill?.registry?.owner, skill?.registry?.slug, skill?.name);
+      const owner = identity.owner;
+      const slug = identity.slug;
       if (owner && slug) {
         map.set(`${owner}/${slug}`, skill);
       }
@@ -342,6 +491,16 @@ const model = {
 
     if (this.sortBy === "name") {
       list.sort((left, right) => String(left?.title || left?.slug || "").localeCompare(String(right?.title || right?.slug || "")));
+    } else if (this.sortBy === "rating") {
+      list.sort((left, right) => {
+        const leftScore = Number(left?.score) || 0;
+        const rightScore = Number(right?.score) || 0;
+        if (leftScore !== rightScore) return rightScore - leftScore;
+        const leftCount = Number(left?.ratingCount) || 0;
+        const rightCount = Number(right?.ratingCount) || 0;
+        if (leftCount !== rightCount) return rightCount - leftCount;
+        return compareByStars(left, right);
+      });
     } else {
       list.sort(compareByStars);
     }
@@ -350,20 +509,33 @@ const model = {
   },
 
   get paginatedSkills() {
-    const start = (this.page - 1) * PER_PAGE;
-    return this.filteredSkills.slice(start, start + PER_PAGE);
+    return this.filteredSkills;
   },
 
   get totalPages() {
-    return Math.max(1, Math.ceil(this.filteredSkills.length / PER_PAGE));
+    return 1;
   },
 
   get browseResultsSummary() {
     const total = this.normalizedRegistrySkills().length;
     const visible = this.filteredSkills.length;
     if (!total) return "No skills available";
-    if (visible === total) return `${total} skill${total === 1 ? "" : "s"} available`;
-    return `Showing ${visible} of ${total} skills`;
+    if (!this.search.trim() && this.registryLoadedSections.length) {
+      return `Showing ${visible} discovered marketplace skills`;
+    }
+    return `${visible} skill${visible === 1 ? "" : "s"} available`;
+  },
+
+  get canLoadMoreRegistrySkills() {
+    return !this.search.trim() && this.registryHasMore && !this.registryLoading;
+  },
+
+  get installedRegistrySkillCount() {
+    return (this.skills || []).filter((skill) => skill?.registry?.owner && skill?.registry?.slug).length;
+  },
+
+  get installedUpdatableSkillCount() {
+    return (this.skills || []).filter((skill) => skill?.registry?.owner && skill?.registry?.slug).length;
   },
 
   get sectionFilters() {
@@ -400,6 +572,7 @@ const model = {
   },
 
   getBrowseSubtitle(skill) {
+    if (skill?.ownerLabel) return skill.ownerLabel;
     if (skill?.owner) return skill.owner;
     const tag = skill?.tags?.[0];
     if (tag) return formatTag(tag);
@@ -439,6 +612,31 @@ const model = {
     return normalized.toFixed(1);
   },
 
+  scoreTone(score, kind = "quality") {
+    const normalized = Number(score) || 0;
+    if (normalized >= 85) return "strong";
+    if (normalized >= 70) return kind === "security" ? "caution" : "medium";
+    return "weak";
+  },
+
+  qualityScoreDescription(score) {
+    const normalized = Number(score) || 0;
+    if (normalized >= 90) return "Excellent structure and high confidence for safe reuse.";
+    if (normalized >= 80) return "Strong source quality with only minor quality concerns.";
+    if (normalized >= 70) return "Usable, but review details before installing broadly.";
+    if (normalized > 0) return "Low source quality. Review carefully before trusting this skill.";
+    return "No quality assessment available.";
+  },
+
+  securityScoreDescription(score) {
+    const normalized = Number(score) || 0;
+    if (normalized >= 90) return "Low apparent risk based on current registry checks.";
+    if (normalized >= 80) return "Generally safe-looking, with no major security flags surfaced.";
+    if (normalized >= 70) return "Some caution is warranted. Review the source before installing.";
+    if (normalized > 0) return "Elevated risk indicators. Inspect the source and scope carefully.";
+    return "No security assessment available.";
+  },
+
   getThumbnailUrl(skill) {
     return deriveThumbnail(skill);
   },
@@ -459,7 +657,8 @@ const model = {
     this.detailLoading = true;
     this.detailError = "";
     this.detailHtml = "";
-    openModal("components/skills/detail.html");
+    this.detailTab = "source";
+    openModal(this.detailModalPath || "components/skills/detail.html");
     try {
       const response = await fetchApi("/skills", {
         method: "POST",
@@ -479,12 +678,19 @@ const model = {
         ...(result.data || {}),
       };
       this.refreshSelectedSkillState();
-      this.detailHtml = renderSafeMarkdown(this.selectedSkill.skillMd || "No SKILL.md content returned.");
+      this.detailHtml = renderSafeMarkdown(stripMarkdownFrontmatter(this.selectedSkill.skillMd || "No SKILL.md content returned."), { breaks: false });
+      this.selectedSkill.sourceReferences = Array.isArray(this.selectedSkill.sourceReferences)
+        ? this.selectedSkill.sourceReferences
+        : [];
     } catch (error) {
       this.detailError = error?.message || "Failed to load skill details";
     } finally {
       this.detailLoading = false;
     }
+  },
+
+  formatAssessmentLines(lines) {
+    return Array.isArray(lines) ? lines.filter(Boolean) : [];
   },
 
   openInstallDialog(skill) {
@@ -598,6 +804,14 @@ const model = {
       }
     } finally {
       this.busyKey = "";
+    }
+  },
+
+  async updateAllInstalledSkills() {
+    const linkedSkills = (this.skills || []).filter((skill) => skill?.registry?.owner && skill?.registry?.slug);
+    if (!linkedSkills.length) return;
+    for (const skill of linkedSkills) {
+      await this.updateSkill(skill);
     }
   },
 
